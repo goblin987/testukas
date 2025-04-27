@@ -19,7 +19,7 @@ import telegram.error as telegram_error
 from telegram.ext import ContextTypes
 # -------------------------
 from telegram import helpers # Keep for potential other uses, but not escaping
-from collections import Counter
+from collections import Counter, defaultdict # <<< Added defaultdict
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -97,7 +97,7 @@ LANGUAGES = {
     "en": {
         "native_name": "English",
         # --- General & Menu ---
-        "welcome": "👋 Welcome, {username}!",
+        "welcome": "👋 Welcome, {username}!\n\n👤 Status: {status} {progress_bar}\n💰 Balance: {balance_str} EUR\n📦 Total Purchases: {purchases}\n🛒 Basket Items: {basket_count}\n\nStart shopping or explore your options below.\n\n⚠️ Note: No refunds.", # <<< Default Welcome Message Format
         "status_label": "Status",
         "balance_label": "Balance",
         "purchases_label": "Total Purchases",
@@ -163,19 +163,19 @@ LANGUAGES = {
         "basket_already_empty": "Basket is already empty.",
         "basket_cleared": "🗑️ Basket Cleared!",
         "pay": "💳 Total to Pay: {amount} EUR",
-        "insufficient_balance": "⚠️ Insufficient Balance!\n\nPlease top up to continue! 💸", # Keep generic one for /profile
-        "insufficient_balance_pay_option": "⚠️ Insufficient Balance! ({balance} / {required} EUR)", # <<< ADDED
-        "pay_crypto_button": "💳 Pay with Crypto", # <<< ADDED
-        "apply_discount_pay_button": "🏷️ Apply Discount Code", # <<< ADDED
-        "skip_discount_button": "⏩ Skip Discount", # <<< ADDED
-        "prompt_discount_or_pay": "Do you have a discount code to apply before paying with crypto?", # <<< ADDED
-        "basket_pay_enter_discount": "Please enter discount code for this purchase:", # <<< ADDED
-        "basket_pay_code_applied": "✅ Code '{code}' applied. New total: {total} EUR. Choose crypto:", # <<< ADDED
-        "basket_pay_code_invalid": "❌ Code invalid: {reason}. Choose crypto to pay {total} EUR:", # <<< ADDED
-        "choose_crypto_for_purchase": "Choose crypto to pay {amount} EUR for your basket:", # <<< ADDED
-        "crypto_purchase_success": "Payment Confirmed! Your purchase details are being sent.", # <<< ADDED
-        "crypto_purchase_failed": "Payment Failed/Expired. Your items are no longer reserved.", # <<< ADDED
-        "basket_pay_too_low": "Basket total {basket_total} EUR is below minimum for {currency}.", # <<< ADDED
+        "insufficient_balance": "⚠️ Insufficient Balance!\n\nPlease top up to continue! 💸",
+        "insufficient_balance_pay_option": "⚠️ Insufficient Balance! ({balance} / {required} EUR)",
+        "pay_crypto_button": "💳 Pay with Crypto",
+        "apply_discount_pay_button": "🏷️ Apply Discount Code",
+        "skip_discount_button": "⏩ Skip Discount",
+        "prompt_discount_or_pay": "Do you have a discount code to apply before paying with crypto?",
+        "basket_pay_enter_discount": "Please enter discount code for this purchase:",
+        "basket_pay_code_applied": "✅ Code '{code}' applied. New total: {total} EUR. Choose crypto:",
+        "basket_pay_code_invalid": "❌ Code invalid: {reason}. Choose crypto to pay {total} EUR:",
+        "choose_crypto_for_purchase": "Choose crypto to pay {amount} EUR for your basket:",
+        "crypto_purchase_success": "Payment Confirmed! Your purchase details are being sent.",
+        "crypto_purchase_failed": "Payment Failed/Expired. Your items are no longer reserved.",
+        "basket_pay_too_low": "Basket total {basket_total} EUR is below minimum for {currency}.",
         "balance_changed_error": "❌ Transaction failed: Your balance changed. Please check your balance and try again.",
         "order_failed_all_sold_out_balance": "❌ Order Failed: All items in your basket became unavailable during processing. Your balance was not charged.",
         "error_processing_purchase_contact_support": "❌ An error occurred while processing your purchase. Please contact support.",
@@ -266,6 +266,7 @@ LANGUAGES = {
         "payment_amount_too_low_api": "❌ Payment Amount Too Low: The equivalent of {target_eur_amount} EUR in {currency} \\({crypto_amount}\\) is below the minimum required by the payment provider \\({min_amount} {currency}\\)\\. Please try a higher EUR amount\\.",
         "error_min_amount_fetch": "❌ Error: Could not retrieve minimum payment amount for {currency}\\. Please try again later or select a different currency\\.",
         "invoice_title_refill": "*Top\\-Up Invoice Created*",
+        "invoice_title_purchase": "*Payment Invoice Created*", # <<< NEW
         "min_amount_label": "*Minimum Amount:*",
         "payment_address_label": "*Payment Address:*",
         "amount_label": "*Amount:*",
@@ -342,7 +343,7 @@ LANGUAGES = {
         "broadcast_confirm_preview": "Preview:",
         "broadcast_confirm_ask": "Send this message?",
         "broadcast_no_users_found_target": "⚠️ Broadcast Warning: No users found matching the target criteria.",
-        # --- NEW User Management Translations ---
+        # --- User Management Translations ---
         "manage_users_title": "👤 Manage Users",
         "manage_users_prompt": "Select a user to view details or manage:",
         "manage_users_no_users": "No users found.",
@@ -367,6 +368,33 @@ LANGUAGES = {
         "unban_success": "✅ User @{username} (ID: {user_id}) has been unbanned.",
         "ban_db_error": "❌ Database error updating ban status.",
         "ban_cannot_ban_admin": "❌ Cannot ban the primary admin.",
+        # <<< Welcome Message Management >>>
+        "manage_welcome_title": "⚙️ Manage Welcome Messages",
+        "manage_welcome_prompt": "Select a template to manage or activate:",
+        "welcome_template_active": " (Active ✅)",
+        "welcome_template_inactive": "",
+        "welcome_button_activate": "✅ Activate",
+        "welcome_button_edit": "✏️ Edit",
+        "welcome_button_delete": "🗑️ Delete",
+        "welcome_button_add_new": "➕ Add New Template",
+        "welcome_activate_success": "✅ Template '{name}' activated.",
+        "welcome_activate_fail": "❌ Failed to activate template '{name}'.",
+        "welcome_add_name_prompt": "Enter a unique short name for the new template (e.g., 'default', 'promo_weekend'):",
+        "welcome_add_name_exists": "❌ Error: A template with the name '{name}' already exists.",
+        "welcome_add_text_prompt": "Template Name: {name}\n\nPlease reply with the full welcome message text. Available placeholders:\n{placeholders}",
+        "welcome_add_success": "✅ Welcome message template '{name}' added.",
+        "welcome_add_fail": "❌ Failed to add welcome message template.",
+        "welcome_edit_text_prompt": "Editing template '{name}'. Current text:\n\n{current_text}\n\nPlease reply with the new text. Available placeholders:\n{placeholders}",
+        "welcome_edit_success": "✅ Template '{name}' updated.",
+        "welcome_edit_fail": "❌ Failed to update template '{name}'.",
+        "welcome_delete_confirm_title": "⚠️ Confirm Deletion",
+        "welcome_delete_confirm_text": "Are you sure you want to delete the welcome message template named '{name}'?",
+        "welcome_delete_confirm_active": "\n\n🚨 WARNING: This is the currently active template! Deleting it will revert to the default built-in message.",
+        "welcome_delete_confirm_last": "\n\n🚨 WARNING: This is the last template! Deleting it will revert to the default built-in message.",
+        "welcome_delete_button_yes": "✅ Yes, Delete Template",
+        "welcome_delete_success": "✅ Template '{name}' deleted.",
+        "welcome_delete_fail": "❌ Failed to delete template '{name}'.",
+        "welcome_delete_not_found": "❌ Template '{name}' not found for deletion.",
     },
     # --- Lithuanian ---
     "lt": {
@@ -434,6 +462,33 @@ LANGUAGES = {
         "unban_success": "✅ Vartotojas @{username} (ID: {user_id}) buvo atblokuotas.",
         "ban_db_error": "❌ Duomenų bazės klaida atnaujinant blokavimo būseną.",
         "ban_cannot_ban_admin": "❌ Negalima užblokuoti pagrindinio administratoriaus.",
+        # <<< Welcome Message Management >>>
+        "manage_welcome_title": "⚙️ Sveikinimo Žinučių Valdymas",
+        "manage_welcome_prompt": "Pasirinkite šabloną valdymui ar aktyvavimui:",
+        "welcome_template_active": " (Aktyvus ✅)",
+        "welcome_template_inactive": "",
+        "welcome_button_activate": "✅ Aktyvuoti",
+        "welcome_button_edit": "✏️ Redaguoti",
+        "welcome_button_delete": "🗑️ Ištrinti",
+        "welcome_button_add_new": "➕ Pridėti Naują Šabloną",
+        "welcome_activate_success": "✅ Šablonas '{name}' aktyvuotas.",
+        "welcome_activate_fail": "❌ Nepavyko aktyvuoti šablono '{name}'.",
+        "welcome_add_name_prompt": "Įveskite unikalų trumpą pavadinimą naujam šablonui (pvz., 'pagrindinis', 'akcija_savaitgalis'):",
+        "welcome_add_name_exists": "❌ Klaida: Šablonas pavadinimu '{name}' jau egzistuoja.",
+        "welcome_add_text_prompt": "Šablono Pavadinimas: {name}\n\nAtsakykite pilnu sveikinimo žinutės tekstu. Galimi laikikliai:\n{placeholders}",
+        "welcome_add_success": "✅ Sveikinimo žinutės šablonas '{name}' pridėtas.",
+        "welcome_add_fail": "❌ Nepavyko pridėti sveikinimo žinutės šablono.",
+        "welcome_edit_text_prompt": "Redaguojamas šablonas '{name}'. Dabartinis tekstas:\n\n{current_text}\n\nAtsakykite nauju tekstu. Galimi laikikliai:\n{placeholders}",
+        "welcome_edit_success": "✅ Šablonas '{name}' atnaujintas.",
+        "welcome_edit_fail": "❌ Nepavyko atnaujinti šablono '{name}'.",
+        "welcome_delete_confirm_title": "⚠️ Patvirtinti Trynimą",
+        "welcome_delete_confirm_text": "Ar tikrai norite ištrinti sveikinimo žinutės šabloną pavadinimu '{name}'?",
+        "welcome_delete_confirm_active": "\n\n🚨 ĮSPĖJIMAS: Tai šiuo metu aktyvus šablonas! Jį ištrynus bus naudojama numatytoji įtaisytoji žinutė.",
+        "welcome_delete_confirm_last": "\n\n🚨 ĮSPĖJIMAS: Tai paskutinis šablonas! Jį ištrynus bus naudojama numatytoji įtaisytoji žinutė.",
+        "welcome_delete_button_yes": "✅ Taip, Trinti Šabloną",
+        "welcome_delete_success": "✅ Šablonas '{name}' ištrintas.",
+        "welcome_delete_fail": "❌ Nepavyko ištrinti šablono '{name}'.",
+        "welcome_delete_not_found": "❌ Šablonas '{name}' nerastas trynimui.",
     },
     # --- Russian ---
     "ru": {
@@ -501,11 +556,41 @@ LANGUAGES = {
         "unban_success": "✅ Пользователь @{username} (ID: {user_id}) разблокирован.",
         "ban_db_error": "❌ Ошибка базы данных при обновлении статуса блокировки.",
         "ban_cannot_ban_admin": "❌ Невозможно заблокировать главного администратора.",
+         # <<< Welcome Message Management >>>
+        "manage_welcome_title": "⚙️ Управление Приветствиями",
+        "manage_welcome_prompt": "Выберите шаблон для управления или активации:",
+        "welcome_template_active": " (Активен ✅)",
+        "welcome_template_inactive": "",
+        "welcome_button_activate": "✅ Активировать",
+        "welcome_button_edit": "✏️ Редактировать",
+        "welcome_button_delete": "🗑️ Удалить",
+        "welcome_button_add_new": "➕ Добавить Новый Шаблон",
+        "welcome_activate_success": "✅ Шаблон '{name}' активирован.",
+        "welcome_activate_fail": "❌ Не удалось активировать шаблон '{name}'.",
+        "welcome_add_name_prompt": "Введите уникальное короткое имя для нового шаблона (например, 'default', 'promo_weekend'):",
+        "welcome_add_name_exists": "❌ Ошибка: Шаблон с именем '{name}' уже существует.",
+        "welcome_add_text_prompt": "Имя шаблона: {name}\n\nПожалуйста, ответьте полным текстом приветственного сообщения. Доступные плейсхолдеры:\n{placeholders}",
+        "welcome_add_success": "✅ Шаблон приветственного сообщения '{name}' добавлен.",
+        "welcome_add_fail": "❌ Не удалось добавить шаблон приветственного сообщения.",
+        "welcome_edit_text_prompt": "Редактирование шаблона '{name}'. Текущий текст:\n\n{current_text}\n\nПожалуйста, ответьте новым текстом. Доступные плейсхолдеры:\n{placeholders}",
+        "welcome_edit_success": "✅ Шаблон '{name}' обновлен.",
+        "welcome_edit_fail": "❌ Не удалось обновить шаблон '{name}'.",
+        "welcome_delete_confirm_title": "⚠️ Подтвердить Удаление",
+        "welcome_delete_confirm_text": "Вы уверены, что хотите удалить шаблон приветственного сообщения с именем '{name}'?",
+        "welcome_delete_confirm_active": "\n\n🚨 ВНИМАНИЕ: Это текущий активный шаблон! Его удаление вернет стандартное встроенное сообщение.",
+        "welcome_delete_confirm_last": "\n\n🚨 ВНИМАНИЕ: Это последний шаблон! Его удаление вернет стандартное встроенное сообщение.",
+        "welcome_delete_button_yes": "✅ Да, Удалить Шаблон",
+        "welcome_delete_success": "✅ Шаблон '{name}' удален.",
+        "welcome_delete_fail": "❌ Не удалось удалить шаблон '{name}'.",
+        "welcome_delete_not_found": "❌ Шаблон '{name}' не найден для удаления.",
     }
 }
 # ==============================================================
 # ===== ^ ^ ^ ^ ^      LANGUAGE DICTIONARY     ^ ^ ^ ^ ^ ======
 # ==============================================================
+
+# <<< Default Welcome Message (Fallback) >>>
+DEFAULT_WELCOME_MESSAGE = LANGUAGES['en']['welcome']
 
 MIN_DEPOSIT_EUR = Decimal('5.00') # Minimum deposit amount in EUR
 NOWPAYMENTS_API_URL = "https://api.nowpayments.io"
@@ -623,34 +708,24 @@ def init_db():
                 target_eur_amount REAL NOT NULL,
                 expected_crypto_amount REAL NOT NULL,
                 created_at TEXT NOT NULL,
-                is_purchase INTEGER DEFAULT 0,       -- <<< ADDED (0=refill, 1=purchase)
-                basket_snapshot_json TEXT DEFAULT NULL, -- <<< ADDED (Store basket JSON)
-                discount_code_used TEXT DEFAULT NULL, -- <<< ADDED
+                is_purchase INTEGER DEFAULT 0,
+                basket_snapshot_json TEXT DEFAULT NULL,
+                discount_code_used TEXT DEFAULT NULL,
                 FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )''')
-            # Add is_purchase column if it doesn't exist
-            try:
+            # Add new columns to pending_deposits if they don't exist
+            pending_cols = [col[1] for col in c.execute("PRAGMA table_info(pending_deposits)").fetchall()]
+            if 'is_purchase' not in pending_cols:
                 c.execute("ALTER TABLE pending_deposits ADD COLUMN is_purchase INTEGER DEFAULT 0")
                 logger.info("Added 'is_purchase' column to pending_deposits table.")
-            except sqlite3.OperationalError as alter_e:
-                 if "duplicate column name: is_purchase" in str(alter_e): pass
-                 else: raise
-            # Add basket_snapshot_json column if it doesn't exist
-            try:
+            if 'basket_snapshot_json' not in pending_cols:
                 c.execute("ALTER TABLE pending_deposits ADD COLUMN basket_snapshot_json TEXT DEFAULT NULL")
                 logger.info("Added 'basket_snapshot_json' column to pending_deposits table.")
-            except sqlite3.OperationalError as alter_e:
-                 if "duplicate column name: basket_snapshot_json" in str(alter_e): pass
-                 else: raise
-            # Add discount_code_used column if it doesn't exist
-            try:
+            if 'discount_code_used' not in pending_cols:
                 c.execute("ALTER TABLE pending_deposits ADD COLUMN discount_code_used TEXT DEFAULT NULL")
                 logger.info("Added 'discount_code_used' column to pending_deposits table.")
-            except sqlite3.OperationalError as alter_e:
-                 if "duplicate column name: discount_code_used" in str(alter_e): pass
-                 else: raise
 
-            # --- NEW: admin_log table ---
+            # --- Admin Log table ---
             c.execute('''CREATE TABLE IF NOT EXISTS admin_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL,
@@ -662,7 +737,30 @@ def init_db():
                 old_value TEXT,
                 new_value TEXT
             )''')
-            # --------------------------
+
+            # --- Bot Settings table ---
+            c.execute('''CREATE TABLE IF NOT EXISTS bot_settings (
+                setting_key TEXT PRIMARY KEY NOT NULL,
+                setting_value TEXT
+            )''')
+            # --- Welcome Messages table ---
+            c.execute('''CREATE TABLE IF NOT EXISTS welcome_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                template_text TEXT NOT NULL
+            )''')
+
+            # <<< INSERT Default Welcome Message if table is empty >>>
+            c.execute("SELECT COUNT(*) FROM welcome_messages")
+            if c.fetchone()[0] == 0:
+                c.execute("INSERT INTO welcome_messages (name, template_text) VALUES (?, ?)",
+                          ("default", DEFAULT_WELCOME_MESSAGE))
+                logger.info("Inserted default welcome message template.")
+                # Set default as active if setting doesn't exist
+                c.execute("INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
+                          ("active_welcome_message_name", "default"))
+                logger.info("Set 'default' as active welcome message in settings.")
+
 
             # Create Indices
             c.execute("CREATE INDEX IF NOT EXISTS idx_product_media_product_id ON product_media(product_id)")
@@ -675,7 +773,8 @@ def init_db():
             c.execute("CREATE INDEX IF NOT EXISTS idx_pending_deposits_user_id ON pending_deposits(user_id)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_admin_log_timestamp ON admin_log(timestamp)") # Index for admin log
             c.execute("CREATE INDEX IF NOT EXISTS idx_users_banned ON users(is_banned)") # Index for banned status
-            c.execute("CREATE INDEX IF NOT EXISTS idx_pending_deposits_is_purchase ON pending_deposits(is_purchase)") # <<< ADDED INDEX
+            c.execute("CREATE INDEX IF NOT EXISTS idx_pending_deposits_is_purchase ON pending_deposits(is_purchase)")
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_welcome_message_name ON welcome_messages(name)") # <<< Index for welcome messages
 
 
             conn.commit()
@@ -861,7 +960,7 @@ else: logger.info(f"{BOT_MEDIA_JSON_PATH} not found. Bot starting without defaul
 # --- Utility Functions ---
 def format_currency(value):
     try: return f"{Decimal(str(value)):.2f}"
-    except (ValueError, TypeError): logger.warning(f"Could format currency {value}"); return "0.00"
+    except (ValueError, TypeError): logger.warning(f"Could not format currency {value}"); return "0.00"
 
 def format_discount_value(dtype, value):
     try:
@@ -1164,7 +1263,7 @@ def fetch_user_ids_for_broadcast(target_type: str, target_value: str | int | Non
     return user_ids
 
 
-# --- NEW: Admin Action Logging (Synchronous) ---
+# --- Admin Action Logging (Synchronous) ---
 def log_admin_action(admin_id: int, action: str, target_user_id: int | None = None, reason: str | None = None, amount_change: float | None = None, old_value=None, new_value=None):
     """Logs an administrative action to the admin_log table."""
     try:
@@ -1189,6 +1288,130 @@ def log_admin_action(admin_id: int, action: str, target_user_id: int | None = No
         logger.error(f"Failed to log admin action: {e}", exc_info=True)
     except Exception as e:
         logger.error(f"Unexpected error logging admin action: {e}", exc_info=True)
+
+# --- Welcome Message Helpers (Synchronous) ---
+def load_active_welcome_message() -> str:
+    """Loads the currently active welcome message template from the database."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
+        setting_row = c.fetchone()
+        active_name = setting_row['setting_value'] if setting_row else "default"
+
+        c.execute("SELECT template_text FROM welcome_messages WHERE name = ?", (active_name,))
+        template_row = c.fetchone()
+        if template_row:
+            logger.info(f"Loaded active welcome message template: '{active_name}'")
+            return template_row['template_text']
+        else:
+            # If active template name points to a non-existent template, try fallback
+            logger.warning(f"Active welcome message template '{active_name}' not found. Trying 'default'.")
+            c.execute("SELECT template_text FROM welcome_messages WHERE name = ?", ("default",))
+            template_row = c.fetchone()
+            if template_row:
+                logger.info("Loaded fallback 'default' welcome message template.")
+                # Optionally update setting to default?
+                # c.execute("UPDATE bot_settings SET setting_value = ? WHERE setting_key = ?", ("default", "active_welcome_message_name"))
+                # conn.commit()
+                return template_row['template_text']
+            else:
+                # If even default is missing
+                logger.error("FATAL: Default welcome message template 'default' not found in DB! Using hardcoded default.")
+                return DEFAULT_WELCOME_MESSAGE
+
+    except sqlite3.Error as e:
+        logger.error(f"DB error loading active welcome message: {e}", exc_info=True)
+        return DEFAULT_WELCOME_MESSAGE
+    except Exception as e:
+        logger.error(f"Unexpected error loading welcome message: {e}", exc_info=True)
+        return DEFAULT_WELCOME_MESSAGE
+    finally:
+        if conn: conn.close()
+
+def get_welcome_message_templates() -> list[dict]:
+    """Fetches all welcome message templates (name and text)."""
+    templates = []
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT name, template_text FROM welcome_messages ORDER BY name")
+            templates = [dict(row) for row in c.fetchall()]
+    except sqlite3.Error as e:
+        logger.error(f"DB error fetching welcome message templates: {e}", exc_info=True)
+    return templates
+
+def add_welcome_message_template(name: str, template_text: str) -> bool:
+    """Adds a new welcome message template."""
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("INSERT INTO welcome_messages (name, template_text) VALUES (?, ?)", (name, template_text))
+            conn.commit()
+            logger.info(f"Added welcome message template: '{name}'")
+            return True
+    except sqlite3.IntegrityError:
+        logger.warning(f"Attempted to add duplicate welcome message template name: '{name}'")
+        return False
+    except sqlite3.Error as e:
+        logger.error(f"DB error adding welcome message template '{name}': {e}", exc_info=True)
+        return False
+
+def update_welcome_message_template(name: str, new_template_text: str) -> bool:
+    """Updates the text of an existing welcome message template."""
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            result = c.execute("UPDATE welcome_messages SET template_text = ? WHERE name = ?", (new_template_text, name))
+            conn.commit()
+            if result.rowcount > 0:
+                logger.info(f"Updated welcome message template: '{name}'")
+                return True
+            else:
+                logger.warning(f"Welcome message template '{name}' not found for update.")
+                return False
+    except sqlite3.Error as e:
+        logger.error(f"DB error updating welcome message template '{name}': {e}", exc_info=True)
+        return False
+
+def delete_welcome_message_template(name: str) -> bool:
+    """Deletes a welcome message template."""
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            # Check if it's the active one (handled better in admin logic now)
+            result = c.execute("DELETE FROM welcome_messages WHERE name = ?", (name,))
+            conn.commit()
+            if result.rowcount > 0:
+                logger.info(f"Deleted welcome message template: '{name}'")
+                return True
+            else:
+                logger.warning(f"Welcome message template '{name}' not found for deletion.")
+                return False
+    except sqlite3.Error as e:
+        logger.error(f"DB error deleting welcome message template '{name}': {e}", exc_info=True)
+        return False
+
+def set_active_welcome_message(name: str) -> bool:
+    """Sets the active welcome message template name in bot_settings."""
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            # First check if the template name actually exists
+            c.execute("SELECT 1 FROM welcome_messages WHERE name = ?", (name,))
+            if not c.fetchone():
+                logger.error(f"Attempted to activate non-existent welcome template: '{name}'")
+                return False
+            # Update or insert the setting
+            c.execute("INSERT OR REPLACE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
+                      ("active_welcome_message_name", name))
+            conn.commit()
+            logger.info(f"Set active welcome message template to: '{name}'")
+            return True
+    except sqlite3.Error as e:
+        logger.error(f"DB error setting active welcome message to '{name}': {e}", exc_info=True)
+        return False
 
 
 # --- Initial Data Load ---
