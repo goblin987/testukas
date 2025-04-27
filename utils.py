@@ -1,1421 +1,1804 @@
-# --- START OF FILE utils.py ---
-
 import sqlite3
 import time
-import os
 import logging
-import json
-import shutil
-import tempfile
 import asyncio
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal, ROUND_DOWN, ROUND_UP # Use Decimal for financial calculations
-import requests # Added for API calls
+import os # Import os for path joining
+from datetime import datetime, timezone
+from collections import defaultdict, Counter
+from decimal import Decimal # Use Decimal for financial calculations
 
 # --- Telegram Imports ---
-from telegram import Update, Bot
-from telegram.constants import ParseMode # Keep import but change default usage
-import telegram.error as telegram_error
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from telegram.constants import ParseMode
+from telegram import helpers
+import telegram.error as telegram_error
 # -------------------------
-from telegram import helpers # Keep for potential other uses, but not escaping
-from collections import Counter, defaultdict # <<< Added defaultdict
 
-# --- Logging Setup ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Import from utils
+from utils import (
+    CITIES, DISTRICTS, PRODUCT_TYPES, THEMES, LANGUAGES, BOT_MEDIA, ADMIN_ID, BASKET_TIMEOUT, MIN_DEPOSIT_EUR,
+    format_currency, get_progress_bar, send_message_with_retry, format_discount_value,
+    clear_expired_basket, fetch_last_purchases, get_user_status, fetch_reviews,
+    NOWPAYMENTS_API_KEY, # Check if NOWPayments is configured
+    get_db_connection, MEDIA_DIR, # Import helper and MEDIA_DIR
+    DEFAULT_PRODUCT_EMOJI, # Import default emoji
+    load_active_welcome_message, # <<< Import welcome message loader
+    DEFAULT_WELCOME_MESSAGE # <<< Import default welcome message
+)
+import json # <<< Make sure json is imported
+import payment # <<< Make sure payment module is imported
+
+
+# Logging setup
 logger = logging.getLogger(__name__)
 
-# --- Render Disk Path Configuration ---
-RENDER_DISK_MOUNT_PATH = '/mnt/data'
-DATABASE_PATH = os.path.join(RENDER_DISK_MOUNT_PATH, 'shop.db')
-MEDIA_DIR = os.path.join(RENDER_DISK_MOUNT_PATH, 'media')
-BOT_MEDIA_JSON_PATH = os.path.join(RENDER_DISK_MOUNT_PATH, 'bot_media.json')
-
-# Ensure the base media directory exists on the disk when the script starts
-try:
-    os.makedirs(MEDIA_DIR, exist_ok=True)
-    logger.info(f"Ensured media directory exists: {MEDIA_DIR}")
-except OSError as e:
-    logger.error(f"Could not create media directory {MEDIA_DIR}: {e}")
-
-logger.info(f"Using Database Path: {DATABASE_PATH}")
-logger.info(f"Using Media Directory: {MEDIA_DIR}")
-logger.info(f"Using Bot Media Config Path: {BOT_MEDIA_JSON_PATH}")
-
-
-# --- Configuration Loading (from Environment Variables) ---
-TOKEN = os.environ.get("TOKEN", "")
-NOWPAYMENTS_API_KEY = os.environ.get("NOWPAYMENTS_API_KEY", "") # NOWPayments API Key
-NOWPAYMENTS_IPN_SECRET = os.environ.get("NOWPAYMENTS_IPN_SECRET", "")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "") # Base URL for Render app (e.g., https://app-name.onrender.com)
-ADMIN_ID_RAW = os.environ.get("ADMIN_ID", None)
-SECONDARY_ADMIN_IDS_STR = os.environ.get("SECONDARY_ADMIN_IDS", "")
-SUPPORT_USERNAME = os.environ.get("SUPPORT_USERNAME", "support")
-BASKET_TIMEOUT_MINUTES_STR = os.environ.get("BASKET_TIMEOUT_MINUTES", "15")
-
-ADMIN_ID = None
-if ADMIN_ID_RAW is not None:
-    try: ADMIN_ID = int(ADMIN_ID_RAW)
-    except (ValueError, TypeError): logger.error(f"Invalid format for ADMIN_ID: {ADMIN_ID_RAW}. Must be an integer.")
-
-SECONDARY_ADMIN_IDS = []
-if SECONDARY_ADMIN_IDS_STR:
-    try: SECONDARY_ADMIN_IDS = [int(uid.strip()) for uid in SECONDARY_ADMIN_IDS_STR.split(',') if uid.strip()]
-    except ValueError: logger.warning("SECONDARY_ADMIN_IDS contains non-integer values. Ignoring.")
-
-BASKET_TIMEOUT = 15 * 60 # Default
-try:
-    BASKET_TIMEOUT = int(BASKET_TIMEOUT_MINUTES_STR) * 60
-    if BASKET_TIMEOUT <= 0: logger.warning("BASKET_TIMEOUT_MINUTES non-positive, using default 15 min."); BASKET_TIMEOUT = 15 * 60
-except ValueError: logger.warning("Invalid BASKET_TIMEOUT_MINUTES, using default 15 min."); BASKET_TIMEOUT = 15 * 60
-
-# --- Validate essential config ---
-if not TOKEN: logger.critical("CRITICAL ERROR: TOKEN environment variable is missing."); raise SystemExit("TOKEN not set.")
-if not NOWPAYMENTS_API_KEY: logger.critical("CRITICAL ERROR: NOWPAYMENTS_API_KEY environment variable is missing."); raise SystemExit("NOWPAYMENTS_API_KEY not set.")
-if not NOWPAYMENTS_IPN_SECRET: logger.warning("WARNING: NOWPAYMENTS_IPN_SECRET environment variable is missing. Webhook verification disabled (less secure).")
-if not WEBHOOK_URL: logger.critical("CRITICAL ERROR: WEBHOOK_URL environment variable is missing."); raise SystemExit("WEBHOOK_URL not set.")
-if ADMIN_ID is None: logger.warning("ADMIN_ID not set or invalid. Primary admin features disabled.")
-logger.info(f"Loaded {len(SECONDARY_ADMIN_IDS)} secondary admin ID(s): {SECONDARY_ADMIN_IDS}")
-logger.info(f"Basket timeout set to {BASKET_TIMEOUT // 60} minutes.")
-logger.info(f"NOWPayments IPN expected at: {WEBHOOK_URL}/webhook")
-logger.info(f"Telegram webhook expected at: {WEBHOOK_URL}/telegram/{TOKEN}")
+# Emojis (Defaults/Placeholders)
+EMOJI_CITY = "🏙️"
+EMOJI_DISTRICT = "🏘️"
+# EMOJI_PRODUCT = "💎" # No longer primary source
+EMOJI_HERB = "🌿" # Keep for potential specific logic if needed
+EMOJI_PRICE = "💰"
+EMOJI_QUANTITY = "🔢"
+EMOJI_BASKET = "🛒"
+EMOJI_PROFILE = "👤"
+EMOJI_REFILL = "💸"
+EMOJI_REVIEW = "📝"
+EMOJI_PRICELIST = "📋"
+EMOJI_LANG = "🌐"
+EMOJI_BACK = "⬅️"
+EMOJI_HOME = "🏠"
+EMOJI_SHOP = "🛍️"
+EMOJI_DISCOUNT = "🏷️"
 
 
-# --- Constants ---
-THEMES = {
-    "default": {"product": "💎", "basket": "🛒", "review": "📝"},
-    "neon": {"product": "💎", "basket": "🛍️", "review": "✨"},
-    "stealth": {"product": "🌑", "basket": "🛒", "review": "🌟"},
-    "nature": {"product": "🌿", "basket": "🧺", "review": "🌸"}
-}
+# --- Helper to get language data ---
+def _get_lang_data(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, dict]:
+    """Gets the current language code and corresponding language data dictionary."""
+    lang = context.user_data.get("lang", "en")
+    # <<< ADDED LOGGING >>>
+    logger.debug(f"_get_lang_data: Retrieved lang '{lang}' from context.user_data.")
+    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    if lang not in LANGUAGES:
+        logger.warning(f"_get_lang_data: Language '{lang}' not found in LANGUAGES dict. Falling back to 'en'.")
+        lang = 'en' # Ensure lang variable reflects the fallback
+    # <<< ADDED LOGGING >>>
+    # Log first few keys for debugging, limit length if too many keys
+    keys_sample = list(lang_data.keys())[:5]
+    logger.debug(f"_get_lang_data: Returning lang '{lang}' and lang_data keys sample: {keys_sample}...")
+    return lang, lang_data
 
-# ==============================================================
-# ===== V V V V V      LANGUAGE DICTIONARY     V V V V V ======
-# ==============================================================
-LANGUAGES = {
-    # --- English ---
-    "en": {
-        "native_name": "English",
-        # --- General & Menu ---
-        "welcome": "👋 Welcome, {username}!\n\n👤 Status: {status} {progress_bar}\n💰 Balance: {balance_str} EUR\n📦 Total Purchases: {purchases}\n🛒 Basket Items: {basket_count}\n\nStart shopping or explore your options below.\n\n⚠️ Note: No refunds.", # <<< Default Welcome Message Format
-        "status_label": "Status",
-        "balance_label": "Balance",
-        "purchases_label": "Total Purchases",
-        "basket_label": "Basket Items",
-        "shopping_prompt": "Start shopping or explore your options below.",
-        "refund_note": "Note: No refunds.",
-        "shop_button": "Shop",
-        "profile_button": "Profile",
-        "top_up_button": "Top Up",
-        "reviews_button": "Reviews",
-        "price_list_button": "Price List",
-        "language_button": "Language",
-        "admin_button": "🔧 Admin Panel",
-        "home_button": "Home",
-        "back_button": "Back",
-        "cancel_button": "Cancel",
-        "error_occurred_answer": "An error occurred. Please try again.",
-        "success_label": "Success!",
-        "error_unexpected": "An unexpected error occurred",
+# --- Helper Function to Build Start Menu ---
+def _build_start_menu_content(user_id: int, username: str, lang_data: dict, context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup]:
+    """Builds the text and keyboard for the start menu using provided lang_data."""
+    logger.debug(f"_build_start_menu_content: Building menu for user {user_id} with lang_data starting with welcome: '{lang_data.get('welcome', 'N/A')}'")
 
-        # --- Shopping Flow ---
-        "choose_city_title": "Choose a City",
-        "select_location_prompt": "Select your location:",
-        "no_cities_available": "No cities available at the moment. Please check back later.",
-        "error_city_not_found": "Error: City not found.",
-        "choose_district_prompt": "Choose a district:",
-        "no_districts_available": "No districts available yet for this city.",
-        "back_cities_button": "Back to Cities",
-        "error_district_city_not_found": "Error: District or city not found.",
-        "select_type_prompt": "Select product type:",
-        "no_types_available": "No product types currently available here.",
-        "error_loading_types": "Error: Failed to Load Product Types",
-        "back_districts_button": "Back to Districts",
-        "available_options_prompt": "Available options:",
-        "no_items_of_type": "No items of this type currently available here.",
-        "error_loading_products": "Error: Failed to Load Products",
-        "back_types_button": "Back to Types",
-        "price_label": "Price",
-        "available_label_long": "Available",
-        "available_label_short": "Av",
-        "add_to_basket_button": "Add to Basket",
-        "error_location_mismatch": "Error: Location data mismatch.",
-        "drop_unavailable": "Drop Unavailable! This option just sold out or was reserved by someone else.",
-        "error_loading_details": "Error: Failed to Load Product Details",
-        "back_options_button": "Back to Options",
-        "no_products_in_city_districts": "No products currently available in any district of this city.",
-        "error_loading_districts": "Error loading districts. Please try again.",
-
-        # --- Basket & Payment ---
-        "added_to_basket": "✅ Item Reserved!\n\n{item} is in your basket for {timeout} minutes! ⏳",
-        "expires_label": "Expires in",
-        "your_basket_title": "Your Basket",
-        "basket_empty": "🛒 Your Basket is Empty!",
-        "add_items_prompt": "Add items to start shopping!",
-        "items_expired_note": "Items may have expired or were removed.",
-        "subtotal_label": "Subtotal",
-        "total_label": "Total",
-        "pay_now_button": "Pay Now",
-        "clear_all_button": "Clear All",
-        "view_basket_button": "View Basket",
-        "clear_basket_button": "Clear Basket",
-        "remove_button_label": "Remove",
-        "basket_already_empty": "Basket is already empty.",
-        "basket_cleared": "🗑️ Basket Cleared!",
-        "pay": "💳 Total to Pay: {amount} EUR",
-        "insufficient_balance": "⚠️ Insufficient Balance!\n\nPlease top up to continue! 💸",
-        "insufficient_balance_pay_option": "⚠️ Insufficient Balance! ({balance} / {required} EUR)",
-        "pay_crypto_button": "💳 Pay with Crypto",
-        "apply_discount_pay_button": "🏷️ Apply Discount Code",
-        "skip_discount_button": "⏩ Skip Discount",
-        "prompt_discount_or_pay": "Do you have a discount code to apply before paying with crypto?",
-        "basket_pay_enter_discount": "Please enter discount code for this purchase:",
-        "basket_pay_code_applied": "✅ Code '{code}' applied. New total: {total} EUR. Choose crypto:",
-        "basket_pay_code_invalid": "❌ Code invalid: {reason}. Choose crypto to pay {total} EUR:",
-        "choose_crypto_for_purchase": "Choose crypto to pay {amount} EUR for your basket:",
-        "crypto_purchase_success": "Payment Confirmed! Your purchase details are being sent.",
-        "crypto_purchase_failed": "Payment Failed/Expired. Your items are no longer reserved.",
-        "basket_pay_too_low": "Basket total {basket_total} EUR is below minimum for {currency}.",
-        "balance_changed_error": "❌ Transaction failed: Your balance changed. Please check your balance and try again.",
-        "order_failed_all_sold_out_balance": "❌ Order Failed: All items in your basket became unavailable during processing. Your balance was not charged.",
-        "error_processing_purchase_contact_support": "❌ An error occurred while processing your purchase. Please contact support.",
-        "purchase_success": "🎉 Purchase Complete!",
-        "sold_out_note": "⚠️ Note: The following items became unavailable during processing and were not included: {items}. You were not charged for these.",
-        "leave_review_now": "Leave Review Now",
-        "back_basket_button": "Back to Basket",
-        "error_adding_db": "Error: Database issue adding item to basket.",
-        "error_adding_unexpected": "Error: An unexpected issue occurred.",
-
-        # --- Discounts ---
-        "discount_no_items": "Your basket is empty. Add items first.",
-        "enter_discount_code_prompt": "Please enter your discount code:",
-        "enter_code_answer": "Enter code in chat.",
-        "apply_discount_button": "Apply Discount Code",
-        "no_code_provided": "No code provided.",
-        "discount_code_not_found": "Discount code not found.",
-        "discount_code_inactive": "This discount code is inactive.",
-        "discount_code_expired": "This discount code has expired.",
-        "invalid_code_expiry_data": "Invalid code expiry data.",
-        "code_limit_reached": "Code reached usage limit.",
-        "internal_error_discount_type": "Internal error processing discount type.",
-        "db_error_validating_code": "Database error validating code.",
-        "unexpected_error_validating_code": "An unexpected error occurred.",
-        "code_applied_message": "Code '{code}' ({value}) applied. Discount: -{amount} EUR",
-        "discount_applied_label": "Discount Applied",
-        "discount_value_label": "Value",
-        "discount_removed_note": "Discount code {code} removed: {reason}",
-        "discount_removed_invalid_basket": "Discount removed (basket changed).",
-        "remove_discount_button": "Remove Discount",
-        "discount_removed_answer": "Discount removed.",
-        "no_discount_answer": "No discount applied.",
-        "send_text_please": "Please send the discount code as text.",
-        "error_calculating_total": "Error calculating total.",
-        "returning_to_basket": "Returning to basket.",
-        "basket_empty_no_discount": "Your basket is empty. Cannot apply discount code.",
-
-        # --- Profile & History ---
-        "profile_title": "Your Profile",
-        "purchase_history_button": "Purchase History",
-        "back_profile_button": "Back to Profile",
-        "purchase_history_title": "Purchase History",
-        "no_purchases_yet": "You haven't made any purchases yet.",
-        "recent_purchases_title": "Your Recent Purchases",
-        "error_loading_profile": "❌ Error: Unable to load profile data.",
-
-        # --- Language ---
-        "language_set_answer": "Language set to {lang}!",
-        "error_saving_language": "Error saving language preference.",
-        "invalid_language_answer": "Invalid language selected.",
-
-        # --- Price List ---
-        "no_cities_for_prices": "No cities available to view prices for.",
-        "price_list_title": "Price List",
-        "select_city_prices_prompt": "Select a city to view available products and prices:",
-        # "error_city_not_found": "Error: City not found.", <-- Already exists above
-        "price_list_title_city": "Price List: {city_name}",
-        "no_products_in_city": "No products currently available in this city.",
-        "back_city_list_button": "Back to City List",
-        "message_truncated_note": "Message truncated due to length limit. Use 'Shop' for full details.",
-        "error_loading_prices_db": "Error: Failed to Load Price List for {city_name}",
-        "error_displaying_prices": "Error displaying price list.",
-        "error_unexpected_prices": "Error: An unexpected issue occurred while generating the price list.",
-
-        # --- Reviews ---
-        "reviews": "📝 Reviews Menu",
-        "view_reviews_button": "View Reviews",
-        "leave_review_button": "Leave a Review",
-        "enter_review_prompt": "Please type your review message and send it.",
-        "enter_review_answer": "Enter your review in the chat.",
-        "send_text_review_please": "Please send text only for your review.",
-        "review_not_empty": "Review cannot be empty. Please try again or cancel.",
-        "review_too_long": "Review is too long (max 1000 characters). Please shorten it.",
-        "review_thanks": "Thank you for your review! Your feedback helps us improve.",
-        "error_saving_review_db": "Error: Could not save your review due to a database issue.",
-        "error_saving_review_unexpected": "Error: An unexpected issue occurred while saving your review.",
-        "user_reviews_title": "User Reviews",
-        "no_reviews_yet": "No reviews have been left yet.",
-        "no_more_reviews": "No more reviews to display.",
-        "prev_button": "Prev",
-        "next_button": "Next",
-        "back_review_menu_button": "Back to Reviews Menu",
-        "unknown_date_label": "Unknown Date",
-        "error_displaying_review": "Error displaying review",
-        "error_updating_review_list": "Error updating review list.",
-
-        # --- Refill / NOWPayments ---
-        "payment_amount_too_low_api": "❌ Payment Amount Too Low: The equivalent of {target_eur_amount} EUR in {currency} \\({crypto_amount}\\) is below the minimum required by the payment provider \\({min_amount} {currency}\\)\\. Please try a higher EUR amount\\.",
-        "error_min_amount_fetch": "❌ Error: Could not retrieve minimum payment amount for {currency}\\. Please try again later or select a different currency\\.",
-        "invoice_title_refill": "*Top\\-Up Invoice Created*",
-        "invoice_title_purchase": "*Payment Invoice Created*", # <<< NEW
-        "min_amount_label": "*Minimum Amount:*",
-        "payment_address_label": "*Payment Address:*",
-        "amount_label": "*Amount:*",
-        "expires_at_label": "*Expires At:*",
-        "send_warning_template": "⚠️ *Important:* Send *exactly* this amount of {asset} to this address\\.",
-        "overpayment_note": "ℹ️ _Sending more than this amount is okay\\! Your balance will be credited based on the amount received after network confirmation\\._",
-        "confirmation_note": "✅ Confirmation is automatic via webhook after network confirmation\\.",
-        "error_estimate_failed": "❌ Error: Could not estimate crypto amount. Please try again or select a different currency.",
-        "error_estimate_currency_not_found": "❌ Error: Currency {currency} not supported for estimation. Please select a different currency.",
-        "crypto_payment_disabled": "Top Up is currently disabled.",
-        "top_up_title": "Top Up Balance",
-        "enter_refill_amount_prompt": "Please reply with the amount in EUR you wish to add to your balance (e.g., 10 or 25.50).",
-        "min_top_up_note": "Minimum top up: {amount} EUR",
-        "enter_amount_answer": "Enter the top-up amount.",
-        "send_amount_as_text": "Please send the amount as text (e.g., 10 or 25.50).",
-        "amount_too_low_msg": "Amount too low. Minimum top up is {amount} EUR. Please enter a higher amount.",
-        "amount_too_high_msg": "Amount too high. Please enter a lower amount.",
-        "invalid_amount_format_msg": "Invalid amount format. Please enter a number (e.g., 10 or 25.50).",
-        "unexpected_error_msg": "An unexpected error occurred. Please try again later.",
-        "choose_crypto_prompt": "You want to top up {amount} EUR. Please choose the cryptocurrency you want to pay with:",
-        "cancel_top_up_button": "Cancel Top Up",
-        "preparing_invoice": "⏳ Preparing your payment invoice...",
-        "failed_invoice_creation": "❌ Failed to create payment invoice. This could be a temporary issue with the payment provider or an API key problem. Please try again later or contact support.",
-        "error_preparing_payment": "❌ An error occurred while preparing the payment. Please try again later.",
-        "top_up_success_title": "✅ Top Up Successful!",
-        "amount_added_label": "Amount Added",
-        "new_balance_label": "Your new balance",
-        "error_nowpayments_api": "❌ Payment API Error: Could not create payment. Please try again later or contact support.",
-        "error_invalid_nowpayments_response": "❌ Payment API Error: Invalid response received. Please contact support.",
-        "error_nowpayments_api_key": "❌ Payment API Error: Invalid API key. Please contact support.",
-        "payment_pending_db_error": "❌ Database Error: Could not record pending payment. Please contact support.",
-        "payment_cancelled_or_expired": "Payment Status: Your payment ({payment_id}) was cancelled or expired.",
-        "webhook_processing_error": "Webhook Error: Could not process payment update {payment_id}.",
-        "webhook_db_update_failed": "Critical Error: Payment {payment_id} confirmed, but DB balance update failed for user {user_id}. Manual action required.",
-        "webhook_pending_not_found": "Webhook Warning: Received update for payment ID {payment_id}, but no pending deposit found in DB.",
-        "webhook_price_fetch_error": "Webhook Error: Could not fetch price for {currency} to confirm EUR value for payment {payment_id}.",
-
-        # --- Admin ---
-        "admin_menu": "🔧 Admin Panel\n\nManage the bot from here:",
-        "admin_select_city": "🏙️ Select City to Edit\n\nChoose a city:",
-        "admin_select_district": "🏘️ Select District in {city}\n\nPick a district:",
-        "admin_select_type": "💎 Select Product Type\n\nChoose or create a type:",
-        "admin_choose_action": "📦 Manage {type} in {city}, {district}\n\nWhat would you like to do?",
-        "set_media_prompt_plain": "📸 Send a photo, video, or GIF to display above all messages:",
-        "state_error": "❌ Error: Invalid State\n\nPlease start the 'Add New Product' process again from the Admin Panel.",
-        "support": "📞 Need Help?\n\nContact {support} for assistance!",
-        "file_download_error": "❌ Error: Failed to Download Media\n\nPlease try again or contact {support}. ",
-        "admin_enter_type_emoji": "✍️ Please reply with a single emoji for the product type:",
-        "admin_type_emoji_set": "Emoji set to {emoji}.",
-        "admin_edit_type_emoji_button": "✏️ Change Emoji",
-        "admin_invalid_emoji": "❌ Invalid input. Please send a single emoji.",
-        "admin_type_emoji_updated": "✅ Emoji updated successfully for {type_name}!",
-        "admin_edit_type_menu": "🧩 Editing Type: {type_name}\n\nCurrent Emoji: {emoji}\n\nWhat would you like to do?",
-        # --- Broadcast Translations ---
-        "broadcast_select_target": "📢 Broadcast Message\n\nSelect the target audience:",
-        "broadcast_target_all": "👥 All Users",
-        "broadcast_target_city": "🏙️ By Last Purchased City",
-        "broadcast_target_status": "👑 By User Status",
-        "broadcast_target_inactive": "⏳ By Inactivity (Days)",
-        "broadcast_select_city_target": "🏙️ Select City to Target\n\nUsers whose last purchase was in:",
-        "broadcast_select_status_target": "👑 Select Status to Target:",
-        "broadcast_status_vip": "VIP 👑",
-        "broadcast_status_regular": "Regular ⭐",
-        "broadcast_status_new": "New 🌱",
-        "broadcast_enter_inactive_days": "⏳ Enter Inactivity Period\n\nPlease reply with the number of days since the user's last purchase (or since registration if no purchases). Users inactive for this many days or more will receive the message.",
-        "broadcast_invalid_days": "❌ Invalid number of days. Please enter a positive whole number.",
-        "broadcast_days_too_large": "❌ Number of days is too large. Please enter a smaller number.",
-        "broadcast_ask_message": "📝 Now send the message content (text, photo, video, or GIF with caption):",
-        "broadcast_confirm_title": "📢 Confirm Broadcast",
-        "broadcast_confirm_target_all": "Target: All Users",
-        "broadcast_confirm_target_city": "Target: Last Purchase in {city}",
-        "broadcast_confirm_target_status": "Target: Status - {status}",
-        "broadcast_confirm_target_inactive": "Target: Inactive >= {days} days",
-        "broadcast_confirm_preview": "Preview:",
-        "broadcast_confirm_ask": "Send this message?",
-        "broadcast_no_users_found_target": "⚠️ Broadcast Warning: No users found matching the target criteria.",
-        # --- User Management Translations ---
-        "manage_users_title": "👤 Manage Users",
-        "manage_users_prompt": "Select a user to view details or manage:",
-        "manage_users_no_users": "No users found.",
-        "view_user_profile_title": "👤 User Profile: @{username} (ID: {user_id})",
-        "user_profile_status": "Status",
-        "user_profile_balance": "Balance",
-        "user_profile_purchases": "Total Purchases",
-        "user_profile_banned": "Banned Status",
-        "user_profile_is_banned": "Yes 🚫",
-        "user_profile_not_banned": "No ✅",
-        "user_profile_button_adjust_balance": "💰 Adjust Balance",
-        "user_profile_button_ban": "🚫 Ban User",
-        "user_profile_button_unban": "✅ Unban User",
-        "user_profile_button_back_list": "⬅️ Back to User List",
-        "adjust_balance_prompt": "Reply with the amount to adjust balance for @{username} (ID: {user_id}).\nUse a positive number to add (e.g., 10.50) or a negative number to subtract (e.g., -5.00).",
-        "adjust_balance_reason_prompt": "Please reply with a brief reason for this balance adjustment ({amount} EUR):",
-        "adjust_balance_invalid_amount": "❌ Invalid amount. Please enter a non-zero number (e.g., 10.5 or -5).",
-        "adjust_balance_reason_empty": "❌ Reason cannot be empty. Please provide a reason.",
-        "adjust_balance_success": "✅ Balance adjusted successfully for @{username}. New balance: {new_balance} EUR.",
-        "adjust_balance_db_error": "❌ Database error adjusting balance.",
-        "ban_success": "🚫 User @{username} (ID: {user_id}) has been banned.",
-        "unban_success": "✅ User @{username} (ID: {user_id}) has been unbanned.",
-        "ban_db_error": "❌ Database error updating ban status.",
-        "ban_cannot_ban_admin": "❌ Cannot ban the primary admin.",
-        # <<< Welcome Message Management >>>
-        "manage_welcome_title": "⚙️ Manage Welcome Messages",
-        "manage_welcome_prompt": "Select a template to manage or activate:",
-        "welcome_template_active": " (Active ✅)",
-        "welcome_template_inactive": "",
-        "welcome_button_activate": "✅ Activate",
-        "welcome_button_edit": "✏️ Edit",
-        "welcome_button_delete": "🗑️ Delete",
-        "welcome_button_add_new": "➕ Add New Template",
-        "welcome_activate_success": "✅ Template '{name}' activated.",
-        "welcome_activate_fail": "❌ Failed to activate template '{name}'.",
-        "welcome_add_name_prompt": "Enter a unique short name for the new template (e.g., 'default', 'promo_weekend'):",
-        "welcome_add_name_exists": "❌ Error: A template with the name '{name}' already exists.",
-        "welcome_add_text_prompt": "Template Name: {name}\n\nPlease reply with the full welcome message text. Available placeholders:\n{placeholders}",
-        "welcome_add_success": "✅ Welcome message template '{name}' added.",
-        "welcome_add_fail": "❌ Failed to add welcome message template.",
-        "welcome_edit_text_prompt": "Editing template '{name}'. Current text:\n\n{current_text}\n\nPlease reply with the new text. Available placeholders:\n{placeholders}",
-        "welcome_edit_success": "✅ Template '{name}' updated.",
-        "welcome_edit_fail": "❌ Failed to update template '{name}'.",
-        "welcome_delete_confirm_title": "⚠️ Confirm Deletion",
-        "welcome_delete_confirm_text": "Are you sure you want to delete the welcome message template named '{name}'?",
-        "welcome_delete_confirm_active": "\n\n🚨 WARNING: This is the currently active template! Deleting it will revert to the default built-in message.",
-        "welcome_delete_confirm_last": "\n\n🚨 WARNING: This is the last template! Deleting it will revert to the default built-in message.",
-        "welcome_delete_button_yes": "✅ Yes, Delete Template",
-        "welcome_delete_success": "✅ Template '{name}' deleted.",
-        "welcome_delete_fail": "❌ Failed to delete template '{name}'.",
-        "welcome_delete_not_found": "❌ Template '{name}' not found for deletion.",
-    },
-    # --- Lithuanian ---
-    "lt": {
-        "native_name": "Lietuvių",
-        # ... (keep existing translations) ...
-        "no_products_in_city_districts": "Šiuo metu šiame mieste nėra prekių jokiuose rajonuose.",
-        "error_loading_districts": "Klaida kraunant rajonus. Bandykite dar kartą.",
-        "insufficient_balance_pay_option": "⚠️ Nepakankamas Likutis! ({balance} / {required} EUR)",
-        "pay_crypto_button": "💳 Mokėti Kriptovaliuta",
-        "apply_discount_pay_button": "🏷️ Panaudoti Nuolaidos Kodą",
-        "skip_discount_button": "⏩ Praleisti Nuolaidą",
-        "prompt_discount_or_pay": "Ar turite nuolaidos kodą, kurį norite panaudoti prieš mokant kriptovaliuta?",
-        "basket_pay_enter_discount": "Įveskite nuolaidos kodą šiam pirkiniui:",
-        "basket_pay_code_applied": "✅ Kodas '{code}' pritaikytas. Nauja suma: {total} EUR. Pasirinkite kriptovaliutą:",
-        "basket_pay_code_invalid": "❌ Kodas netinkamas: {reason}. Pasirinkite kriptovaliutą mokėti {total} EUR:",
-        "choose_crypto_for_purchase": "Pasirinkite kriptovaliutą sumokėti {amount} EUR už krepšelį:",
-        "crypto_purchase_success": "Mokėjimas Patvirtintas! Jūsų pirkimo informacija siunčiama.",
-        "crypto_purchase_failed": "Mokėjimas Nepavyko/Baigėsi. Jūsų prekės nebėra rezervuotos.",
-        "basket_pay_too_low": "Krepšelio suma {basket_total} EUR yra mažesnė nei minimali {currency}.",
-        # --- NEW Broadcast Translations ---
-        "broadcast_select_target": "📢 Masinė Žinutė\n\nPasirinkite gavėjų auditoriją:",
-        "broadcast_target_all": "👥 Visi Vartotojai",
-        "broadcast_target_city": "🏙️ Pagal Paskutinio Pirkimo Miestą",
-        "broadcast_target_status": "👑 Pagal Vartotojo Statusą",
-        "broadcast_target_inactive": "⏳ Pagal Neaktyvumą (Dienomis)",
-        "broadcast_select_city_target": "🏙️ Pasirinkite Miestą\n\nVartotojai, kurių paskutinis pirkimas buvo:",
-        "broadcast_select_status_target": "👑 Pasirinkite Statusą:",
-        "broadcast_status_vip": "VIP 👑",
-        "broadcast_status_regular": "Reguliarus ⭐",
-        "broadcast_status_new": "Naujas 🌱",
-        "broadcast_enter_inactive_days": "⏳ Įveskite Neaktyvumo Laikotarpį\n\nAtsakykite nurodydami dienų skaičių nuo vartotojo paskutinio pirkimo (arba registracijos, jei pirkimų nebuvo). Vartotojai, neaktyvūs tiek ar daugiau dienų, gaus žinutę.",
-        "broadcast_invalid_days": "❌ Neteisingas dienų skaičius. Įveskite teigiamą sveikąjį skaičių.",
-        "broadcast_days_too_large": "❌ Dienų skaičius per didelis. Įveskite mažesnį skaičių.",
-        "broadcast_ask_message": "📝 Dabar siųskite žinutės turinį (tekstą, nuotrauką, vaizdo įrašą ar GIF su aprašu):",
-        "broadcast_confirm_title": "📢 Patvirtinti Siuntimą",
-        "broadcast_confirm_target_all": "Gavėjai: Visi Vartotojai",
-        "broadcast_confirm_target_city": "Gavėjai: Paskutinis pirkimas {city}",
-        "broadcast_confirm_target_status": "Gavėjai: Statusas - {status}",
-        "broadcast_confirm_target_inactive": "Gavėjai: Neaktyvūs >= {days} dienų",
-        "broadcast_confirm_preview": "Peržiūra:",
-        "broadcast_confirm_ask": "Siųsti šią žinutę?",
-        "broadcast_no_users_found_target": "⚠️ Transliacijos Įspėjimas: Nerasta vartotojų, atitinkančių nurodytus kriterijus.",
-        # --- NEW User Management Translations ---
-        "manage_users_title": "👤 Vartotojų Valdymas",
-        "manage_users_prompt": "Pasirinkite vartotoją peržiūrai ar valdymui:",
-        "manage_users_no_users": "Vartotojų nerasta.",
-        "view_user_profile_title": "👤 Vartotojo Profilis: @{username} (ID: {user_id})",
-        "user_profile_status": "Būsena",
-        "user_profile_balance": "Balansas",
-        "user_profile_purchases": "Viso Pirkimų",
-        "user_profile_banned": "Užblokavimo Būsena",
-        "user_profile_is_banned": "Taip 🚫",
-        "user_profile_not_banned": "Ne ✅",
-        "user_profile_button_adjust_balance": "💰 Koreguoti Balansą",
-        "user_profile_button_ban": "🚫 Užblokuoti Vartotoją",
-        "user_profile_button_unban": "✅ Atblokuoti Vartotoją",
-        "user_profile_button_back_list": "⬅️ Atgal į Vartotojų Sąrašą",
-        "adjust_balance_prompt": "Atsakykite suma, kuria koreguoti vartotojo @{username} (ID: {user_id}) balansą.\nNaudokite teigiamą skaičių pridėjimui (pvz., 10.50) arba neigiamą atėmimui (pvz., -5.00).",
-        "adjust_balance_reason_prompt": "Prašome atsakyti trumpa šio balanso koregavimo ({amount} EUR) priežastimi:",
-        "adjust_balance_invalid_amount": "❌ Neteisinga suma. Įveskite nenulinį skaičių (pvz., 10.5 arba -5).",
-        "adjust_balance_reason_empty": "❌ Priežastis negali būti tuščia. Prašome nurodyti priežastį.",
-        "adjust_balance_success": "✅ Vartotojo @{username} balansas sėkmingai pakoreguotas. Naujas balansas: {new_balance} EUR.",
-        "adjust_balance_db_error": "❌ Duomenų bazės klaida koreguojant balansą.",
-        "ban_success": "🚫 Vartotojas @{username} (ID: {user_id}) buvo užblokuotas.",
-        "unban_success": "✅ Vartotojas @{username} (ID: {user_id}) buvo atblokuotas.",
-        "ban_db_error": "❌ Duomenų bazės klaida atnaujinant blokavimo būseną.",
-        "ban_cannot_ban_admin": "❌ Negalima užblokuoti pagrindinio administratoriaus.",
-        # <<< Welcome Message Management >>>
-        "manage_welcome_title": "⚙️ Sveikinimo Žinučių Valdymas",
-        "manage_welcome_prompt": "Pasirinkite šabloną valdymui ar aktyvavimui:",
-        "welcome_template_active": " (Aktyvus ✅)",
-        "welcome_template_inactive": "",
-        "welcome_button_activate": "✅ Aktyvuoti",
-        "welcome_button_edit": "✏️ Redaguoti",
-        "welcome_button_delete": "🗑️ Ištrinti",
-        "welcome_button_add_new": "➕ Pridėti Naują Šabloną",
-        "welcome_activate_success": "✅ Šablonas '{name}' aktyvuotas.",
-        "welcome_activate_fail": "❌ Nepavyko aktyvuoti šablono '{name}'.",
-        "welcome_add_name_prompt": "Įveskite unikalų trumpą pavadinimą naujam šablonui (pvz., 'pagrindinis', 'akcija_savaitgalis'):",
-        "welcome_add_name_exists": "❌ Klaida: Šablonas pavadinimu '{name}' jau egzistuoja.",
-        "welcome_add_text_prompt": "Šablono Pavadinimas: {name}\n\nAtsakykite pilnu sveikinimo žinutės tekstu. Galimi laikikliai:\n{placeholders}",
-        "welcome_add_success": "✅ Sveikinimo žinutės šablonas '{name}' pridėtas.",
-        "welcome_add_fail": "❌ Nepavyko pridėti sveikinimo žinutės šablono.",
-        "welcome_edit_text_prompt": "Redaguojamas šablonas '{name}'. Dabartinis tekstas:\n\n{current_text}\n\nAtsakykite nauju tekstu. Galimi laikikliai:\n{placeholders}",
-        "welcome_edit_success": "✅ Šablonas '{name}' atnaujintas.",
-        "welcome_edit_fail": "❌ Nepavyko atnaujinti šablono '{name}'.",
-        "welcome_delete_confirm_title": "⚠️ Patvirtinti Trynimą",
-        "welcome_delete_confirm_text": "Ar tikrai norite ištrinti sveikinimo žinutės šabloną pavadinimu '{name}'?",
-        "welcome_delete_confirm_active": "\n\n🚨 ĮSPĖJIMAS: Tai šiuo metu aktyvus šablonas! Jį ištrynus bus naudojama numatytoji įtaisytoji žinutė.",
-        "welcome_delete_confirm_last": "\n\n🚨 ĮSPĖJIMAS: Tai paskutinis šablonas! Jį ištrynus bus naudojama numatytoji įtaisytoji žinutė.",
-        "welcome_delete_button_yes": "✅ Taip, Trinti Šabloną",
-        "welcome_delete_success": "✅ Šablonas '{name}' ištrintas.",
-        "welcome_delete_fail": "❌ Nepavyko ištrinti šablono '{name}'.",
-        "welcome_delete_not_found": "❌ Šablonas '{name}' nerastas trynimui.",
-    },
-    # --- Russian ---
-    "ru": {
-        "native_name": "Русский",
-        # ... (keep existing translations) ...
-        "no_products_in_city_districts": "В настоящее время в этом городе нет доступных товаров ни в одном районе.",
-        "error_loading_districts": "Ошибка загрузки районов. Пожалуйста, попробуйте еще раз.",
-        "insufficient_balance_pay_option": "⚠️ Недостаточно Средств! ({balance} / {required} EUR)",
-        "pay_crypto_button": "💳 Оплатить Криптовалютой",
-        "apply_discount_pay_button": "🏷️ Применить Промокод",
-        "skip_discount_button": "⏩ Пропустить Скидку",
-        "prompt_discount_or_pay": "У вас есть промокод для применения перед оплатой криптовалютой?",
-        "basket_pay_enter_discount": "Введите промокод для этой покупки:",
-        "basket_pay_code_applied": "✅ Код '{code}' применен. Новая сумма: {total} EUR. Выберите криптовалюту:",
-        "basket_pay_code_invalid": "❌ Код недействителен: {reason}. Выберите криптовалюту для оплаты {total} EUR:",
-        "choose_crypto_for_purchase": "Выберите криптовалюту для оплаты {amount} EUR за вашу корзину:",
-        "crypto_purchase_success": "Платеж Подтвержден! Информация о вашей покупке отправляется.",
-        "crypto_purchase_failed": "Платеж Неудачен/Истек. Ваши товары больше не зарезервированы.",
-        "basket_pay_too_low": "Сумма корзины {basket_total} EUR ниже минимума для {currency}.",
-        # --- NEW Broadcast Translations ---
-        "broadcast_select_target": "📢 Массовая Рассылка\n\nВыберите целевую аудиторию:",
-        "broadcast_target_all": "👥 Все Пользователи",
-        "broadcast_target_city": "🏙️ По Городу Последней Покупки",
-        "broadcast_target_status": "👑 По Статусу Пользователя",
-        "broadcast_target_inactive": "⏳ По Неактивности (Дни)",
-        "broadcast_select_city_target": "🏙️ Выберите Город\n\nПользователи, чья последняя покупка была в:",
-        "broadcast_select_status_target": "👑 Выберите Статус:",
-        "broadcast_status_vip": "VIP 👑",
-        "broadcast_status_regular": "Постоянный ⭐",
-        "broadcast_status_new": "Новый 🌱",
-        "broadcast_enter_inactive_days": "⏳ Введите Период Неактивности\n\nОтветьте количеством дней с последней покупки пользователя (или с момента регистрации, если покупок не было). Пользователи, неактивные в течение этого или большего количества дней, получат сообщение.",
-        "broadcast_invalid_days": "❌ Неверное количество дней. Введите положительное целое число.",
-        "broadcast_days_too_large": "❌ Слишком большое количество дней. Введите меньшее число.",
-        "broadcast_ask_message": "📝 Теперь отправьте содержимое сообщения (текст, фото, видео или GIF с подписью):",
-        "broadcast_confirm_title": "📢 Подтвердить Рассылку",
-        "broadcast_confirm_target_all": "Цель: Все Пользователи",
-        "broadcast_confirm_target_city": "Цель: Последняя покупка в {city}",
-        "broadcast_confirm_target_status": "Цель: Статус - {status}",
-        "broadcast_confirm_target_inactive": "Цель: Неактивные >= {days} дней",
-        "broadcast_confirm_preview": "Предпросмотр:",
-        "broadcast_confirm_ask": "Отправить это сообщение?",
-        "broadcast_no_users_found_target": "⚠️ Предупреждение Рассылки: Пользователи, соответствующие критериям, не найдены.",
-        # --- NEW User Management Translations ---
-        "manage_users_title": "👤 Управление Пользователями",
-        "manage_users_prompt": "Выберите пользователя для просмотра или управления:",
-        "manage_users_no_users": "Пользователи не найдены.",
-        "view_user_profile_title": "👤 Профиль Пользователя: @{username} (ID: {user_id})",
-        "user_profile_status": "Статус",
-        "user_profile_balance": "Баланс",
-        "user_profile_purchases": "Всего Покупок",
-        "user_profile_banned": "Статус Блокировки",
-        "user_profile_is_banned": "Да 🚫",
-        "user_profile_not_banned": "Нет ✅",
-        "user_profile_button_adjust_balance": "💰 Изменить Баланс",
-        "user_profile_button_ban": "🚫 Заблокировать",
-        "user_profile_button_unban": "✅ Разблокировать",
-        "user_profile_button_back_list": "⬅️ Назад к Списку",
-        "adjust_balance_prompt": "Ответьте суммой для изменения баланса @{username} (ID: {user_id}).\nИспользуйте положительное число для добавления (напр., 10.50) или отрицательное для вычитания (напр., -5.00).",
-        "adjust_balance_reason_prompt": "Пожалуйста, ответьте краткой причиной этого изменения баланса ({amount} EUR):",
-        "adjust_balance_invalid_amount": "❌ Неверная сумма. Введите ненулевое число (напр., 10.5 или -5).",
-        "adjust_balance_reason_empty": "❌ Причина не может быть пустой. Укажите причину.",
-        "adjust_balance_success": "✅ Баланс пользователя @{username} успешно изменен. Новый баланс: {new_balance} EUR.",
-        "adjust_balance_db_error": "❌ Ошибка базы данных при изменении баланса.",
-        "ban_success": "🚫 Пользователь @{username} (ID: {user_id}) заблокирован.",
-        "unban_success": "✅ Пользователь @{username} (ID: {user_id}) разблокирован.",
-        "ban_db_error": "❌ Ошибка базы данных при обновлении статуса блокировки.",
-        "ban_cannot_ban_admin": "❌ Невозможно заблокировать главного администратора.",
-         # <<< Welcome Message Management >>>
-        "manage_welcome_title": "⚙️ Управление Приветствиями",
-        "manage_welcome_prompt": "Выберите шаблон для управления или активации:",
-        "welcome_template_active": " (Активен ✅)",
-        "welcome_template_inactive": "",
-        "welcome_button_activate": "✅ Активировать",
-        "welcome_button_edit": "✏️ Редактировать",
-        "welcome_button_delete": "🗑️ Удалить",
-        "welcome_button_add_new": "➕ Добавить Новый Шаблон",
-        "welcome_activate_success": "✅ Шаблон '{name}' активирован.",
-        "welcome_activate_fail": "❌ Не удалось активировать шаблон '{name}'.",
-        "welcome_add_name_prompt": "Введите уникальное короткое имя для нового шаблона (например, 'default', 'promo_weekend'):",
-        "welcome_add_name_exists": "❌ Ошибка: Шаблон с именем '{name}' уже существует.",
-        "welcome_add_text_prompt": "Имя шаблона: {name}\n\nПожалуйста, ответьте полным текстом приветственного сообщения. Доступные плейсхолдеры:\n{placeholders}",
-        "welcome_add_success": "✅ Шаблон приветственного сообщения '{name}' добавлен.",
-        "welcome_add_fail": "❌ Не удалось добавить шаблон приветственного сообщения.",
-        "welcome_edit_text_prompt": "Редактирование шаблона '{name}'. Текущий текст:\n\n{current_text}\n\nПожалуйста, ответьте новым текстом. Доступные плейсхолдеры:\n{placeholders}",
-        "welcome_edit_success": "✅ Шаблон '{name}' обновлен.",
-        "welcome_edit_fail": "❌ Не удалось обновить шаблон '{name}'.",
-        "welcome_delete_confirm_title": "⚠️ Подтвердить Удаление",
-        "welcome_delete_confirm_text": "Вы уверены, что хотите удалить шаблон приветственного сообщения с именем '{name}'?",
-        "welcome_delete_confirm_active": "\n\n🚨 ВНИМАНИЕ: Это текущий активный шаблон! Его удаление вернет стандартное встроенное сообщение.",
-        "welcome_delete_confirm_last": "\n\n🚨 ВНИМАНИЕ: Это последний шаблон! Его удаление вернет стандартное встроенное сообщение.",
-        "welcome_delete_button_yes": "✅ Да, Удалить Шаблон",
-        "welcome_delete_success": "✅ Шаблон '{name}' удален.",
-        "welcome_delete_fail": "❌ Не удалось удалить шаблон '{name}'.",
-        "welcome_delete_not_found": "❌ Шаблон '{name}' не найден для удаления.",
-    }
-}
-# ==============================================================
-# ===== ^ ^ ^ ^ ^      LANGUAGE DICTIONARY     ^ ^ ^ ^ ^ ======
-# ==============================================================
-
-# <<< Default Welcome Message (Fallback) >>>
-DEFAULT_WELCOME_MESSAGE = LANGUAGES['en']['welcome']
-
-MIN_DEPOSIT_EUR = Decimal('5.00') # Minimum deposit amount in EUR
-NOWPAYMENTS_API_URL = "https://api.nowpayments.io"
-COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
-FEE_ADJUSTMENT = Decimal('1.0')
-
-# --- Global Data Variables ---
-CITIES = {}
-DISTRICTS = {}
-PRODUCT_TYPES = {}
-DEFAULT_PRODUCT_EMOJI = "💎" # Fallback emoji
-SIZES = ["2g", "5g"]
-BOT_MEDIA = {'type': None, 'path': None}
-currency_price_cache = {}
-min_amount_cache = {}
-CACHE_EXPIRY_SECONDS = 900
-
-# --- Database Connection Helper ---
-def get_db_connection():
-    """Returns a connection to the SQLite database using the configured path."""
+    balance, purchases, basket_count = Decimal('0.0'), 0, 0
+    conn = None
     try:
-        db_dir = os.path.dirname(DATABASE_PATH)
-        if db_dir:
-            try: os.makedirs(db_dir, exist_ok=True)
-            except OSError as e: logger.warning(f"Could not create DB dir {db_dir}: {e}")
-        conn = sqlite3.connect(DATABASE_PATH, timeout=10)
-        conn.execute("PRAGMA foreign_keys = ON;")
-        conn.row_factory = sqlite3.Row
-        return conn
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT balance, total_purchases FROM users WHERE user_id = ?", (user_id,))
+        result = c.fetchone()
+        if result:
+            balance = Decimal(str(result['balance']))
+            purchases = result['total_purchases']
+
+        clear_expired_basket(context, user_id)
+        basket = context.user_data.get("basket", [])
+        basket_count = len(basket)
+        if not basket: context.user_data.pop('applied_discount', None)
+
     except sqlite3.Error as e:
-        logger.critical(f"CRITICAL ERROR connecting to database at {DATABASE_PATH}: {e}")
-        raise SystemExit(f"Failed to connect to database: {e}")
+        logger.error(f"Database error fetching data for start menu build (user {user_id}): {e}", exc_info=True)
+    finally:
+        if conn: conn.close()
+
+    # <<< MODIFICATION START: Load active welcome message >>>
+    # Load the active template (this is a synchronous call)
+    active_welcome_template = load_active_welcome_message()
+    if not active_welcome_template: # Should not happen if default exists
+        logger.error("No active or default welcome message found in DB, using hardcoded fallback.")
+        active_welcome_template = DEFAULT_WELCOME_MESSAGE # Use hardcoded default
+    # <<< MODIFICATION END >>>
 
 
-# --- Database Initialization ---
-def init_db():
-    """Initializes the database schema ONLY."""
+    # Build Message Text using the PASSED lang_data and the ACTIVE template
+    status = get_user_status(purchases)
+    balance_str = format_currency(balance)
+    # status_label = lang_data.get("status_label", "Status") # No longer needed if using template directly
+    # balance_label = lang_data.get("balance_label", "Balance")
+    # purchases_label = lang_data.get("purchases_label", "Total Purchases")
+    # basket_label = lang_data.get("basket_label", "Basket Items")
+    # shopping_prompt = lang_data.get("shopping_prompt", "Start shopping or explore your options below.") # Template should include this
+    # refund_note = lang_data.get("refund_note", "Note: No refunds.") # Template should include this
+    progress_bar_str = get_progress_bar(purchases)
+
+    # <<< MODIFICATION START: Format the active template >>>
     try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            # --- users table ---
-            c.execute('''CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0,
-                total_purchases INTEGER DEFAULT 0, basket TEXT DEFAULT '',
-                language TEXT DEFAULT 'en', theme TEXT DEFAULT 'default'
-            )''')
-            # Add is_banned column if it doesn't exist
+        full_welcome = active_welcome_template.format(
+            username=username,
+            status=status,
+            progress_bar=progress_bar_str,
+            balance_str=balance_str,
+            purchases=purchases,
+            basket_count=basket_count
+            # Add any other placeholders you might want to support here
+        )
+    except KeyError as e:
+        logger.error(f"Placeholder error formatting welcome message template. Missing key: {e}. Template: '{active_welcome_template[:100]}...'")
+        # Fallback to a very basic message if formatting fails
+        full_welcome = f"👋 Welcome, {username}!\n\n💰 Balance: {balance_str} EUR"
+    # <<< MODIFICATION END >>>
+
+
+    # Build Keyboard using the PASSED lang_data (Keyboard remains the same)
+    shop_button_text = lang_data.get("shop_button", "Shop")
+    profile_button_text = lang_data.get("profile_button", "Profile")
+    top_up_button_text = lang_data.get("top_up_button", "Top Up")
+    reviews_button_text = lang_data.get("reviews_button", "Reviews")
+    price_list_button_text = lang_data.get("price_list_button", "Price List")
+    language_button_text = lang_data.get("language_button", "Language")
+    admin_button_text = lang_data.get("admin_button", "🔧 Admin Panel")
+    keyboard = [
+        [InlineKeyboardButton(f"{EMOJI_SHOP} {shop_button_text}", callback_data="shop")],
+        [InlineKeyboardButton(f"{EMOJI_PROFILE} {profile_button_text}", callback_data="profile"),
+         InlineKeyboardButton(f"{EMOJI_REFILL} {top_up_button_text}", callback_data="refill")],
+        [InlineKeyboardButton(f"{EMOJI_REVIEW} {reviews_button_text}", callback_data="reviews"),
+         InlineKeyboardButton(f"{EMOJI_PRICELIST} {price_list_button_text}", callback_data="price_list"),
+         InlineKeyboardButton(f"{EMOJI_LANG} {language_button_text}", callback_data="language")]
+    ]
+    if user_id == ADMIN_ID:
+        keyboard.insert(0, [InlineKeyboardButton(admin_button_text, callback_data="admin_menu")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    return full_welcome, reply_markup
+
+
+# --- User Command Handlers ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /start command and the initial welcome message."""
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+    is_callback = update.callback_query is not None
+    user_id = user.id
+    username = user.username or user.first_name or f"User_{user_id}"
+
+    # Send Bot Media (Only on direct /start, not callbacks)
+    if not is_callback and BOT_MEDIA.get("type") and BOT_MEDIA.get("path"):
+        media_path = BOT_MEDIA["path"]
+        media_type = BOT_MEDIA["type"]
+        logger.info(f"Attempting to send BOT_MEDIA: type={media_type}, path={media_path}")
+
+        # Check if file exists using asyncio.to_thread
+        if await asyncio.to_thread(os.path.exists, media_path):
             try:
-                c.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
-                logger.info("Added 'is_banned' column to users table.")
-            except sqlite3.OperationalError as alter_e:
-                 if "duplicate column name: is_banned" in str(alter_e): pass # Ignore if already exists
-                 else: raise # Reraise other errors
-
-            # cities table
-            c.execute('''CREATE TABLE IF NOT EXISTS cities (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL
-            )''')
-            # districts table
-            c.execute('''CREATE TABLE IF NOT EXISTS districts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, city_id INTEGER NOT NULL, name TEXT NOT NULL,
-                FOREIGN KEY(city_id) REFERENCES cities(id) ON DELETE CASCADE, UNIQUE (city_id, name)
-            )''')
-            # product_types table
-            c.execute(f'''CREATE TABLE IF NOT EXISTS product_types (
-                name TEXT PRIMARY KEY NOT NULL,
-                emoji TEXT DEFAULT '{DEFAULT_PRODUCT_EMOJI}'
-            )''')
-            try:
-                c.execute(f"ALTER TABLE product_types ADD COLUMN emoji TEXT DEFAULT '{DEFAULT_PRODUCT_EMOJI}'")
-                logger.info("Added 'emoji' column to product_types table.")
-            except sqlite3.OperationalError as alter_e:
-                 if "duplicate column name: emoji" in str(alter_e): pass
-                 else: raise
-            # products table
-            c.execute('''CREATE TABLE IF NOT EXISTS products (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, city TEXT NOT NULL, district TEXT NOT NULL,
-                product_type TEXT NOT NULL, size TEXT NOT NULL, name TEXT NOT NULL, price REAL NOT NULL,
-                available INTEGER DEFAULT 1, reserved INTEGER DEFAULT 0, original_text TEXT,
-                added_by INTEGER, added_date TEXT
-            )''')
-            # product_media table
-            c.execute('''CREATE TABLE IF NOT EXISTS product_media (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL,
-                media_type TEXT NOT NULL, file_path TEXT UNIQUE NOT NULL, telegram_file_id TEXT,
-                FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
-            )''')
-            # purchases table
-            c.execute('''CREATE TABLE IF NOT EXISTS purchases (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, product_id INTEGER,
-                product_name TEXT NOT NULL, product_type TEXT NOT NULL, product_size TEXT NOT NULL,
-                price_paid REAL NOT NULL, city TEXT NOT NULL, district TEXT NOT NULL, purchase_date TEXT NOT NULL,
-                FOREIGN KEY(user_id) REFERENCES users(user_id),
-                FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE SET NULL
-            )''')
-            # reviews table
-            c.execute('''CREATE TABLE IF NOT EXISTS reviews (
-                review_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
-                review_text TEXT NOT NULL, review_date TEXT NOT NULL,
-                FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
-            )''')
-            # discount_codes table
-            c.execute('''CREATE TABLE IF NOT EXISTS discount_codes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE NOT NULL,
-                discount_type TEXT NOT NULL CHECK(discount_type IN ('percentage', 'fixed')),
-                value REAL NOT NULL, is_active INTEGER DEFAULT 1 CHECK(is_active IN (0, 1)),
-                max_uses INTEGER DEFAULT NULL, uses_count INTEGER DEFAULT 0,
-                created_date TEXT NOT NULL, expiry_date TEXT DEFAULT NULL
-            )''')
-            # pending_deposits table
-            c.execute('''CREATE TABLE IF NOT EXISTS pending_deposits (
-                payment_id TEXT PRIMARY KEY NOT NULL,
-                user_id INTEGER NOT NULL,
-                currency TEXT NOT NULL,
-                target_eur_amount REAL NOT NULL,
-                expected_crypto_amount REAL NOT NULL,
-                created_at TEXT NOT NULL,
-                is_purchase INTEGER DEFAULT 0,
-                basket_snapshot_json TEXT DEFAULT NULL,
-                discount_code_used TEXT DEFAULT NULL,
-                FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
-            )''')
-            # Add new columns to pending_deposits if they don't exist
-            pending_cols = [col[1] for col in c.execute("PRAGMA table_info(pending_deposits)").fetchall()]
-            if 'is_purchase' not in pending_cols:
-                c.execute("ALTER TABLE pending_deposits ADD COLUMN is_purchase INTEGER DEFAULT 0")
-                logger.info("Added 'is_purchase' column to pending_deposits table.")
-            if 'basket_snapshot_json' not in pending_cols:
-                c.execute("ALTER TABLE pending_deposits ADD COLUMN basket_snapshot_json TEXT DEFAULT NULL")
-                logger.info("Added 'basket_snapshot_json' column to pending_deposits table.")
-            if 'discount_code_used' not in pending_cols:
-                c.execute("ALTER TABLE pending_deposits ADD COLUMN discount_code_used TEXT DEFAULT NULL")
-                logger.info("Added 'discount_code_used' column to pending_deposits table.")
-
-            # --- Admin Log table ---
-            c.execute('''CREATE TABLE IF NOT EXISTS admin_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                admin_id INTEGER NOT NULL,
-                target_user_id INTEGER,
-                action TEXT NOT NULL,
-                reason TEXT,
-                amount_change REAL DEFAULT NULL,
-                old_value TEXT,
-                new_value TEXT
-            )''')
-
-            # --- Bot Settings table ---
-            c.execute('''CREATE TABLE IF NOT EXISTS bot_settings (
-                setting_key TEXT PRIMARY KEY NOT NULL,
-                setting_value TEXT
-            )''')
-            # --- Welcome Messages table ---
-            c.execute('''CREATE TABLE IF NOT EXISTS welcome_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                template_text TEXT NOT NULL
-            )''')
-
-            # <<< INSERT Default Welcome Message if table is empty >>>
-            c.execute("SELECT COUNT(*) FROM welcome_messages")
-            if c.fetchone()[0] == 0:
-                c.execute("INSERT INTO welcome_messages (name, template_text) VALUES (?, ?)",
-                          ("default", DEFAULT_WELCOME_MESSAGE))
-                logger.info("Inserted default welcome message template.")
-                # Set default as active if setting doesn't exist
-                c.execute("INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
-                          ("active_welcome_message_name", "default"))
-                logger.info("Set 'default' as active welcome message in settings.")
-
-
-            # Create Indices
-            c.execute("CREATE INDEX IF NOT EXISTS idx_product_media_product_id ON product_media(product_id)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases(purchase_date)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_purchases_user ON purchases(user_id)")
-            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_districts_city_name ON districts(city_id, name)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_products_location_type ON products(city, district, product_type)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_reviews_user ON reviews(user_id)")
-            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_discount_code_unique ON discount_codes(code)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_pending_deposits_user_id ON pending_deposits(user_id)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_admin_log_timestamp ON admin_log(timestamp)") # Index for admin log
-            c.execute("CREATE INDEX IF NOT EXISTS idx_users_banned ON users(is_banned)") # Index for banned status
-            c.execute("CREATE INDEX IF NOT EXISTS idx_pending_deposits_is_purchase ON pending_deposits(is_purchase)")
-            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_welcome_message_name ON welcome_messages(name)") # <<< Index for welcome messages
-
-
-            conn.commit()
-            logger.info(f"Database schema at {DATABASE_PATH} initialized/verified successfully.")
-    except sqlite3.Error as e:
-        logger.critical(f"CRITICAL ERROR: Database initialization failed for {DATABASE_PATH}: {e}", exc_info=True)
-        raise SystemExit("Database initialization failed.")
-
-
-# --- Pending Deposit DB Helpers (Synchronous - Modified) ---
-def add_pending_deposit(payment_id: str, user_id: int, currency: str, target_eur_amount: float, expected_crypto_amount: float, is_purchase: bool = False, basket_snapshot: list | None = None, discount_code: str | None = None):
-    basket_json = json.dumps(basket_snapshot) if basket_snapshot else None
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("""
-                INSERT INTO pending_deposits (
-                    payment_id, user_id, currency, target_eur_amount,
-                    expected_crypto_amount, created_at, is_purchase,
-                    basket_snapshot_json, discount_code_used
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                payment_id, user_id, currency.lower(), target_eur_amount,
-                expected_crypto_amount, datetime.now(timezone.utc).isoformat(),
-                1 if is_purchase else 0, basket_json, discount_code
-                ))
-            conn.commit()
-            log_type = "direct purchase" if is_purchase else "refill"
-            logger.info(f"Added pending {log_type} deposit {payment_id} for user {user_id} ({target_eur_amount:.2f} EUR / exp: {expected_crypto_amount} {currency}). Basket items: {len(basket_snapshot) if basket_snapshot else 0}.")
-            return True
-    except sqlite3.IntegrityError:
-        logger.warning(f"Attempted to add duplicate pending deposit ID: {payment_id}")
-        return False
-    except sqlite3.Error as e:
-        logger.error(f"DB error adding pending deposit {payment_id} for user {user_id}: {e}", exc_info=True)
-        return False
-
-def get_pending_deposit(payment_id: str):
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            # Fetch all needed columns, including the new ones
-            c.execute("""
-                SELECT user_id, currency, target_eur_amount, expected_crypto_amount,
-                       is_purchase, basket_snapshot_json, discount_code_used
-                FROM pending_deposits WHERE payment_id = ?
-            """, (payment_id,))
-            row = c.fetchone()
-            if row:
-                row_dict = dict(row)
-                # Handle potential NULL for expected amount
-                if row_dict.get('expected_crypto_amount') is None:
-                    logger.warning(f"Pending deposit {payment_id} has NULL expected_crypto_amount. Using 0.0.")
-                    row_dict['expected_crypto_amount'] = 0.0
-                # Deserialize basket snapshot if present
-                if row_dict.get('basket_snapshot_json'):
-                    try:
-                        row_dict['basket_snapshot'] = json.loads(row_dict['basket_snapshot_json'])
-                    except json.JSONDecodeError:
-                        logger.error(f"Failed to decode basket_snapshot_json for payment {payment_id}.")
-                        row_dict['basket_snapshot'] = None # Indicate error or empty
+                # --- FIX STARTS HERE ---
+                # Pass the file path directly to the send_* methods
+                if media_type == "photo":
+                    await context.bot.send_photo(chat_id=chat_id, photo=media_path)
+                elif media_type == "video":
+                    await context.bot.send_video(chat_id=chat_id, video=media_path)
+                elif media_type == "gif":
+                    # Note: GIFs might be sent as animation or video depending on how they were saved.
+                    # If saved as .mp4 (common for GIFs by bots), send_animation is usually correct.
+                    # If saved as .gif, send_animation should also work.
+                    await context.bot.send_animation(chat_id=chat_id, animation=media_path)
                 else:
-                    row_dict['basket_snapshot'] = None
-                return row_dict
-            else:
-                return None
-    except sqlite3.Error as e:
-        logger.error(f"DB error fetching pending deposit {payment_id}: {e}", exc_info=True)
-        return None
+                    logger.warning(f"Unsupported BOT_MEDIA type for sending: {media_type}")
+                # --- FIX ENDS HERE ---
 
-# --- HELPER TO UNRESERVE ITEMS (Synchronous) ---
-def _unreserve_basket_items(basket_snapshot: list | None):
-    """Helper to decrement reserved counts for items in a snapshot."""
-    if not basket_snapshot:
-        return
-
-    product_ids_to_release_counts = Counter(item['product_id'] for item in basket_snapshot)
-    if not product_ids_to_release_counts:
-        return
-
-    conn = None
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("BEGIN")
-        decrement_data = [(count, pid) for pid, count in product_ids_to_release_counts.items()]
-        c.executemany("UPDATE products SET reserved = MAX(0, reserved - ?) WHERE id = ?", decrement_data)
-        conn.commit()
-        total_released = sum(product_ids_to_release_counts.values())
-        logger.info(f"Un-reserved {total_released} items due to failed/expired basket payment.")
-    except sqlite3.Error as e:
-        logger.error(f"DB error un-reserving items: {e}", exc_info=True)
-        if conn and conn.in_transaction: conn.rollback()
-    finally:
-        if conn: conn.close()
-
-# --- REMOVE PENDING DEPOSIT (Modified to handle un-reserving) ---
-def remove_pending_deposit(payment_id: str, trigger: str = "unknown"): # Added trigger for logging
-    pending_info = get_pending_deposit(payment_id) # Get info *before* deleting
-    deleted = False
-    conn = None
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        result = c.execute("DELETE FROM pending_deposits WHERE payment_id = ?", (payment_id,))
-        conn.commit()
-        deleted = result.rowcount > 0
-        if deleted:
-            logger.info(f"Removed pending deposit record for payment ID: {payment_id} (Trigger: {trigger})")
+            except telegram_error.TelegramError as e:
+                # Catch potential errors during sending (e.g., file too large, network issue)
+                logger.error(f"Error sending BOT_MEDIA ({media_path}): {e}", exc_info=True)
+            except Exception as e:
+                # Catch any other unexpected errors during sending
+                logger.error(f"Unexpected error sending BOT_MEDIA ({media_path}): {e}", exc_info=True)
         else:
-            logger.info(f"No pending deposit record found to remove for payment ID: {payment_id} (Trigger: {trigger})")
-    except sqlite3.Error as e:
-        logger.error(f"DB error removing pending deposit {payment_id} (Trigger: {trigger}): {e}", exc_info=True)
-        return False # Indicate failure
-
-    # If deletion was successful AND it was a purchase AND it was triggered by failure/expiry/cancel
-    if deleted and pending_info and pending_info.get('is_purchase') == 1 and trigger in ["failure", "expiry", "cancel"]:
-        logger.info(f"Payment {payment_id} was a direct purchase that failed/expired/cancelled. Attempting to un-reserve items.")
-        _unreserve_basket_items(pending_info.get('basket_snapshot'))
-
-    return deleted
+            logger.warning(f"BOT_MEDIA path {media_path} not found on disk when trying to send.")
 
 
-# --- Data Loading Functions (Synchronous) ---
-def load_cities():
-    cities_data = {}
-    try:
-        with get_db_connection() as conn: c = conn.cursor(); c.execute("SELECT id, name FROM cities ORDER BY name"); cities_data = {str(row['id']): row['name'] for row in c.fetchall()}
-    except sqlite3.Error as e: logger.error(f"Failed to load cities: {e}")
-    return cities_data
-
-def load_districts():
-    districts_data = {}
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor(); c.execute("SELECT d.city_id, d.id, d.name FROM districts d ORDER BY d.city_id, d.name")
-            for row in c.fetchall(): city_id_str = str(row['city_id']); districts_data.setdefault(city_id_str, {})[str(row['id'])] = row['name']
-    except sqlite3.Error as e: logger.error(f"Failed to load districts: {e}")
-    return districts_data
-
-def load_product_types():
-    product_types_dict = {}
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute(f"SELECT name, COALESCE(emoji, '{DEFAULT_PRODUCT_EMOJI}') as emoji FROM product_types ORDER BY name")
-            product_types_dict = {row['name']: row['emoji'] for row in c.fetchall()}
-    except sqlite3.Error as e:
-        logger.error(f"Failed to load product types and emojis: {e}")
-    return product_types_dict
-
-def load_all_data():
-    """Loads all dynamic data, modifying global variables IN PLACE."""
-    global CITIES, DISTRICTS, PRODUCT_TYPES
-    logger.info("Starting load_all_data (in-place update)...")
-    try:
-        cities_data = load_cities()
-        districts_data = load_districts()
-        product_types_dict = load_product_types()
-
-        CITIES.clear(); CITIES.update(cities_data)
-        DISTRICTS.clear(); DISTRICTS.update(districts_data)
-        PRODUCT_TYPES.clear(); PRODUCT_TYPES.update(product_types_dict)
-
-        logger.info(f"Loaded (in-place) {len(CITIES)} cities, {sum(len(d) for d in DISTRICTS.values())} districts, {len(PRODUCT_TYPES)} product types.")
-    except Exception as e:
-        logger.error(f"Error during load_all_data (in-place): {e}", exc_info=True)
-        CITIES.clear(); DISTRICTS.clear(); PRODUCT_TYPES.clear()
-
-
-# --- Bot Media Loading (from specified path on disk) ---
-if os.path.exists(BOT_MEDIA_JSON_PATH):
-    try:
-        with open(BOT_MEDIA_JSON_PATH, 'r') as f: BOT_MEDIA = json.load(f)
-        logger.info(f"Loaded BOT_MEDIA from {BOT_MEDIA_JSON_PATH}: {BOT_MEDIA}")
-        if BOT_MEDIA.get("path"):
-            filename = os.path.basename(BOT_MEDIA["path"]); correct_path = os.path.join(MEDIA_DIR, filename)
-            if BOT_MEDIA["path"] != correct_path: logger.warning(f"Correcting BOT_MEDIA path from {BOT_MEDIA['path']} to {correct_path}"); BOT_MEDIA["path"] = correct_path
-    except Exception as e: logger.warning(f"Could not load/parse {BOT_MEDIA_JSON_PATH}: {e}. Using default BOT_MEDIA.")
-else: logger.info(f"{BOT_MEDIA_JSON_PATH} not found. Bot starting without default media.")
-
-
-# --- Utility Functions ---
-def format_currency(value):
-    try: return f"{Decimal(str(value)):.2f}"
-    except (ValueError, TypeError): logger.warning(f"Could not format currency {value}"); return "0.00"
-
-def format_discount_value(dtype, value):
-    try:
-        if dtype == 'percentage': return f"{Decimal(str(value)):.1f}%"
-        elif dtype == 'fixed': return f"{format_currency(value)} EUR"
-        return str(value)
-    except (ValueError, TypeError): logger.warning(f"Could not format discount {dtype} {value}"); return "N/A"
-
-def get_progress_bar(purchases):
-    try:
-        p_int = int(purchases); thresholds = [0, 2, 5, 8, 10]
-        filled = min(sum(1 for t in thresholds if p_int >= t), 5)
-        return '[' + '🟩' * filled + '⬜️' * (5 - filled) + ']'
-    except (ValueError, TypeError): return '[⬜️⬜️⬜️⬜️⬜️]'
-
-async def send_message_with_retry(
-    bot: Bot,
-    chat_id: int,
-    text: str,
-    reply_markup=None,
-    max_retries=3,
-    parse_mode=None,
-    disable_web_page_preview=False
-):
-    for attempt in range(max_retries):
+    # Ensure user exists and language context is set
+    lang = context.user_data.get("lang", None)
+    if lang is None:
+        conn = None
         try:
-            return await bot.send_message(
-                chat_id=chat_id, text=text, reply_markup=reply_markup,
-                parse_mode=parse_mode, disable_web_page_preview=disable_web_page_preview
-            )
+            conn = get_db_connection()
+            c = conn.cursor()
+            # Ensure user exists
+            c.execute("""
+                INSERT INTO users (user_id, username, language) VALUES (?, ?, 'en')
+                ON CONFLICT(user_id) DO UPDATE SET username=excluded.username
+            """, (user_id, username))
+            # Get language
+            c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+            result = c.fetchone()
+            db_lang = result['language'] if result else 'en'
+            lang = db_lang if db_lang and db_lang in LANGUAGES else 'en'
+            conn.commit()
+            context.user_data["lang"] = lang # Store in context
+            logger.info(f"start: Set language for user {user_id} to '{lang}' from DB/default.")
+        except sqlite3.Error as e:
+            logger.error(f"DB error ensuring user/language in start for {user_id}: {e}")
+            lang = 'en' # Default on error
+            context.user_data["lang"] = lang
+            logger.warning(f"start: Defaulted language to 'en' for user {user_id} due to DB error.")
+        finally:
+            if conn: conn.close()
+    else:
+        logger.info(f"start: Using existing language '{lang}' from context for user {user_id}.")
+
+    # Build and Send/Edit Menu
+    lang, lang_data = _get_lang_data(context) # Get final language data again after ensuring it's set
+    full_welcome, reply_markup = _build_start_menu_content(user_id, username, lang_data, context)
+
+    if is_callback:
+        query = update.callback_query
+        try:
+             # Only edit if message content or markup has changed
+             if query.message and (query.message.text != full_welcome or query.message.reply_markup != reply_markup):
+                  await query.edit_message_text(full_welcome, reply_markup=reply_markup, parse_mode=None)
+             elif query: await query.answer() # Acknowledge if not modified
         except telegram_error.BadRequest as e:
-            logger.warning(f"BadRequest sending to {chat_id} (Attempt {attempt+1}/{max_retries}): {e}. Text: {text[:100]}...")
-            if "chat not found" in str(e).lower() or "bot was blocked" in str(e).lower() or "user is deactivated" in str(e).lower():
-                logger.error(f"Unrecoverable BadRequest sending to {chat_id}: {e}. Aborting retries.")
-                return None
-            if attempt < max_retries - 1: await asyncio.sleep(1 * (2 ** attempt)); continue
-            else: logger.error(f"Max retries reached for BadRequest sending to {chat_id}: {e}"); break
-        except telegram_error.RetryAfter as e:
-            retry_seconds = e.retry_after + 1
-            logger.warning(f"Rate limit hit sending to {chat_id}. Retrying after {retry_seconds} seconds.")
-            if retry_seconds > 60: logger.error(f"RetryAfter requested > 60s ({retry_seconds}s). Aborting for chat {chat_id}."); return None
-            await asyncio.sleep(retry_seconds); continue
-        except telegram_error.NetworkError as e:
-            logger.warning(f"NetworkError sending to {chat_id} (Attempt {attempt+1}/{max_retries}): {e}")
-            if attempt < max_retries - 1: await asyncio.sleep(2 * (2 ** attempt)); continue
-            else: logger.error(f"Max retries reached for NetworkError sending to {chat_id}: {e}"); break
-        except telegram_error.Unauthorized: logger.warning(f"Unauthorized error sending to {chat_id}. User may have blocked the bot. Aborting."); return None
+              if "message is not modified" not in str(e).lower():
+                  logger.warning(f"Failed to edit start message (callback): {e}. Sending new.")
+                  await send_message_with_retry(context.bot, chat_id, full_welcome, reply_markup=reply_markup, parse_mode=None)
+              elif query: await query.answer()
         except Exception as e:
-            logger.error(f"Unexpected error sending message to {chat_id} (Attempt {attempt+1}/{max_retries}): {e}", exc_info=True)
-            if attempt < max_retries - 1: await asyncio.sleep(1 * (2 ** attempt)); continue
-            else: logger.error(f"Max retries reached after unexpected error sending to {chat_id}: {e}"); break
-    logger.error(f"Failed to send message to {chat_id} after {max_retries} attempts: {text[:100]}..."); return None
-
-def get_date_range(period_key):
-    now = datetime.now()
-    try:
-        if period_key == 'today': start = now.replace(hour=0, minute=0, second=0, microsecond=0); end = now
-        elif period_key == 'yesterday': yesterday = now - timedelta(days=1); start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0); end = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
-        elif period_key == 'week': start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0); end = now
-        elif period_key == 'last_week': start_of_this_week = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0); end_of_last_week = start_of_this_week - timedelta(microseconds=1); start = (end_of_last_week - timedelta(days=end_of_last_week.weekday())).replace(hour=0, minute=0, second=0, microsecond=0); end = end_of_last_week.replace(hour=23, minute=59, second=59, microsecond=999999)
-        elif period_key == 'month': start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0); end = now
-        elif period_key == 'last_month': first_of_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0); end_of_last_month = first_of_this_month - timedelta(microseconds=1); start = end_of_last_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0); end = end_of_last_month.replace(hour=23, minute=59, second=59, microsecond=999999)
-        elif period_key == 'year': start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0); end = now
-        else: return None, None
-        if start.tzinfo is None: start = start.astimezone()
-        if end.tzinfo is None: end = end.astimezone()
-        return start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
-    except Exception as e: logger.error(f"Error calculating date range for '{period_key}': {e}"); return None, None
-
-def get_user_status(purchases):
-    try:
-        p_int = int(purchases)
-        if p_int >= 10: return "VIP 👑"
-        elif p_int >= 5: return "Regular ⭐"
-        else: return "New 🌱"
-    except (ValueError, TypeError): return "New 🌱"
-
-def clear_expired_basket(context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    if 'basket' not in context.user_data: context.user_data['basket'] = []
-    conn = None
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("BEGIN")
-        c.execute("SELECT basket FROM users WHERE user_id = ?", (user_id,))
-        result = c.fetchone(); basket_str = result['basket'] if result else ''
-        if not basket_str:
-            if context.user_data.get('basket'): context.user_data['basket'] = []
-            if context.user_data.get('applied_discount'): context.user_data.pop('applied_discount', None)
-            c.execute("COMMIT"); return
-        items = basket_str.split(',')
-        current_time = time.time(); valid_items_str_list = []; valid_items_userdata_list = []
-        expired_product_ids_counts = Counter(); expired_items_found = False
-        potential_prod_ids = []
-        for item_part in items:
-            if item_part and ':' in item_part:
-                try: potential_prod_ids.append(int(item_part.split(':')[0]))
-                except ValueError: logger.warning(f"Invalid product ID format in basket string '{item_part}' for user {user_id}")
-        product_prices = {}
-        if potential_prod_ids:
-             placeholders = ','.join('?' * len(potential_prod_ids))
-             c.execute(f"SELECT id, price FROM products WHERE id IN ({placeholders})", potential_prod_ids)
-             product_prices = {row['id']: Decimal(str(row['price'])) for row in c.fetchall()}
-        for item_str in items:
-            if not item_str: continue
-            try:
-                prod_id_str, ts_str = item_str.split(':'); prod_id = int(prod_id_str); ts = float(ts_str)
-                if current_time - ts <= BASKET_TIMEOUT:
-                    valid_items_str_list.append(item_str)
-                    if prod_id in product_prices: valid_items_userdata_list.append({"product_id": prod_id, "price": product_prices[prod_id], "timestamp": ts})
-                    else: logger.warning(f"P{prod_id} price not found during basket validation (user {user_id}).")
-                else: expired_product_ids_counts[prod_id] += 1; expired_items_found = True
-            except (ValueError, IndexError) as e: logger.warning(f"Malformed item '{item_str}' in basket for user {user_id}: {e}")
-        if expired_items_found:
-            new_basket_str = ','.join(valid_items_str_list)
-            c.execute("UPDATE users SET basket = ? WHERE user_id = ?", (new_basket_str, user_id))
-            if expired_product_ids_counts:
-                decrement_data = [(count, pid) for pid, count in expired_product_ids_counts.items()]
-                c.executemany("UPDATE products SET reserved = MAX(0, reserved - ?) WHERE id = ?", decrement_data)
-        c.execute("COMMIT")
-        context.user_data['basket'] = valid_items_userdata_list
-        if not valid_items_userdata_list and context.user_data.get('applied_discount'):
-            context.user_data.pop('applied_discount', None); logger.info(f"Cleared discount for user {user_id} as basket became empty.")
-    except sqlite3.Error as e: logger.error(f"SQLite error clearing basket user {user_id}: {e}", exc_info=True); conn.rollback() if conn and conn.in_transaction else None
-    except Exception as e: logger.error(f"Unexpected error clearing basket user {user_id}: {e}", exc_info=True)
-    finally: conn.close() if conn else None
-
-def clear_all_expired_baskets():
-    logger.info("Running scheduled job: clear_all_expired_baskets")
-    all_expired_product_counts = Counter(); user_basket_updates = []
-    conn = None
-    try:
-        conn = get_db_connection()
-        c = conn.cursor(); c.execute("BEGIN"); c.execute("SELECT user_id, basket FROM users WHERE basket IS NOT NULL AND basket != ''")
-        users_with_baskets = c.fetchall(); current_time = time.time()
-        for user_row in users_with_baskets:
-            user_id = user_row['user_id']; basket_str = user_row['basket']; items = basket_str.split(','); valid_items_str_list = []; user_had_expired = False
-            for item_str in items:
-                if not item_str: continue
-                try:
-                    prod_id_str, ts_str = item_str.split(':'); prod_id = int(prod_id_str); ts = float(ts_str)
-                    if current_time - ts <= BASKET_TIMEOUT: valid_items_str_list.append(item_str)
-                    else: all_expired_product_counts[prod_id] += 1; user_had_expired = True
-                except (ValueError, IndexError) as e: logger.warning(f"Malformed item '{item_str}' user {user_id} global clear: {e}")
-            if user_had_expired: new_basket_str = ','.join(valid_items_str_list); user_basket_updates.append((new_basket_str, user_id))
-        if user_basket_updates: c.executemany("UPDATE users SET basket = ? WHERE user_id = ?", user_basket_updates); logger.info(f"Scheduled clear: Updated baskets for {len(user_basket_updates)} users.")
-        if all_expired_product_counts:
-            decrement_data = [(count, pid) for pid, count in all_expired_product_counts.items()]
-            if decrement_data: c.executemany("UPDATE products SET reserved = MAX(0, reserved - ?) WHERE id = ?", decrement_data); total_released = sum(all_expired_product_counts.values()); logger.info(f"Scheduled clear: Released {total_released} expired product reservations.")
-        conn.commit()
-    except sqlite3.Error as e: logger.error(f"SQLite error in scheduled job clear_all_expired_baskets: {e}", exc_info=True); conn.rollback() if conn and conn.in_transaction else None
-    except Exception as e: logger.error(f"Unexpected error in clear_all_expired_baskets: {e}", exc_info=True)
-    finally: conn.close() if conn else None
-
-def fetch_last_purchases(user_id, limit=10):
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor(); c.execute("SELECT purchase_date, product_name, product_size, price_paid FROM purchases WHERE user_id = ? ORDER BY purchase_date DESC LIMIT ?", (user_id, limit))
-            return [dict(row) for row in c.fetchall()]
-    except sqlite3.Error as e: logger.error(f"DB error fetching purchase history user {user_id}: {e}", exc_info=True); return []
-
-def fetch_reviews(offset=0, limit=5):
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor(); c.execute("SELECT r.review_id, r.user_id, r.review_text, r.review_date, COALESCE(u.username, 'anonymous') as username FROM reviews r LEFT JOIN users u ON r.user_id = u.user_id ORDER BY r.review_date DESC LIMIT ? OFFSET ?", (limit, offset))
-            return [dict(row) for row in c.fetchall()]
-    except sqlite3.Error as e: logger.error(f"Failed to fetch reviews (offset={offset}, limit={limit}): {e}", exc_info=True); return []
+             logger.error(f"Unexpected error editing start message (callback): {e}", exc_info=True)
+             await send_message_with_retry(context.bot, chat_id, full_welcome, reply_markup=reply_markup, parse_mode=None)
+    else:
+        # Send the main welcome message *after* attempting to send the media
+        await send_message_with_retry(context.bot, chat_id, full_welcome, reply_markup=reply_markup, parse_mode=None)
 
 
-# --- API Helpers ---
-def get_nowpayments_min_amount(currency_code: str) -> Decimal | None:
-    currency_code_lower = currency_code.lower()
-    now = time.time()
-    if currency_code_lower in min_amount_cache:
-        min_amount, timestamp = min_amount_cache[currency_code_lower]
-        if now - timestamp < CACHE_EXPIRY_SECONDS * 2: logger.debug(f"Cache hit for {currency_code_lower} min amount: {min_amount}"); return min_amount
-    if not NOWPAYMENTS_API_KEY: logger.error("NOWPayments API key is missing, cannot fetch minimum amount."); return None
-    try:
-        url = f"{NOWPAYMENTS_API_URL}/v1/min-amount"; params = {'currency_from': currency_code_lower}; headers = {'x-api-key': NOWPAYMENTS_API_KEY}
-        logger.debug(f"Fetching min amount for {currency_code_lower} from {url} with params {params}")
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        logger.debug(f"NOWPayments min-amount response status: {response.status_code}, content: {response.text[:200]}")
-        response.raise_for_status()
-        data = response.json()
-        min_amount_key = 'min_amount'
-        if min_amount_key in data and data[min_amount_key] is not None:
-            min_amount = Decimal(str(data[min_amount_key])); min_amount_cache[currency_code_lower] = (min_amount, now)
-            logger.info(f"Fetched minimum amount for {currency_code_lower}: {min_amount} from NOWPayments.")
-            return min_amount
-        else: logger.warning(f"Could not find '{min_amount_key}' key or it was null for {currency_code_lower} in NOWPayments response: {data}"); return None
-    except requests.exceptions.Timeout: logger.error(f"Timeout fetching minimum amount for {currency_code_lower} from NOWPayments."); return None
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching minimum amount for {currency_code_lower} from NOWPayments: {e}")
-        if e.response is not None: logger.error(f"NOWPayments min-amount error response ({e.response.status_code}): {e.response.text}")
-        return None
-    except (KeyError, ValueError, json.JSONDecodeError) as e: logger.error(f"Error parsing NOWPayments min amount response for {currency_code_lower}: {e}"); return None
+# --- Other handlers ---
+async def handle_back_start(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Handles 'Back' button presses that should return to the main start menu."""
+    await start(update, context)
 
-def format_expiration_time(expiration_date_str: str | None) -> str:
-    if not expiration_date_str: return "N/A"
-    try: dt_obj = datetime.fromisoformat(expiration_date_str); return dt_obj.strftime("%H:%M:%S %Z")
-    except (ValueError, TypeError) as e: logger.warning(f"Could not parse expiration date string '{expiration_date_str}': {e}"); return "Invalid Date"
-
-
-# --- Placeholder Handler ---
-async def handle_coming_soon(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+# --- Shopping Handlers ---
+async def handle_shop(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
-    if query:
-        try: await query.answer("This feature is coming soon!", show_alert=True); logger.info(f"User {query.from_user.id} clicked coming soon (data: {query.data})")
-        except Exception as e: logger.error(f"Error answering 'coming soon' callback: {e}")
+    user_id = query.from_user.id
+    lang, lang_data = _get_lang_data(context)
+    logger.info(f"handle_shop triggered by user {user_id} (lang: {lang}).")
 
+    no_cities_available_msg = lang_data.get("no_cities_available", "No cities available at the moment. Please check back later.")
+    choose_city_title = lang_data.get("choose_city_title", "Choose a City")
+    select_location_prompt = lang_data.get("select_location_prompt", "Select your location:")
+    home_button_text = lang_data.get("home_button", "Home")
 
-# --- Fetch User IDs for Broadcast (Synchronous) ---
-def fetch_user_ids_for_broadcast(target_type: str, target_value: str | int | None = None) -> list[int]:
-    """Fetches user IDs based on broadcast target criteria."""
-    user_ids = []
-    conn = None
+    if not CITIES:
+        keyboard = [[InlineKeyboardButton(f"{EMOJI_HOME} {home_button_text}", callback_data="back_start")]]
+        await query.edit_message_text(f"{EMOJI_CITY} {no_cities_available_msg}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        return
+
     try:
-        conn = get_db_connection()
-        c = conn.cursor()
+        sorted_city_ids = sorted(CITIES.keys(), key=lambda city_id: CITIES.get(city_id, ''))
+        keyboard = []
+        for c_id in sorted_city_ids:
+             city_name = CITIES.get(c_id)
+             if city_name: keyboard.append([InlineKeyboardButton(f"{EMOJI_CITY} {city_name}", callback_data=f"city|{c_id}")])
+             else: logger.warning(f"handle_shop: City name missing for ID {c_id}.")
+        keyboard.append([InlineKeyboardButton(f"{EMOJI_HOME} {home_button_text}", callback_data="back_start")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        message_text = f"{EMOJI_CITY} {choose_city_title}\n\n{select_location_prompt}"
+        await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode=None)
+        logger.info(f"handle_shop: Sent city list to user {user_id}.")
+    except telegram_error.BadRequest as e:
+         if "message is not modified" not in str(e).lower(): logger.error(f"Error editing shop message: {e}"); await query.answer("Error displaying cities.", show_alert=True)
+         else: await query.answer()
+    except Exception as e:
+        logger.error(f"Error in handle_shop for user {user_id}: {e}", exc_info=True)
+        try: keyboard = [[InlineKeyboardButton(f"{EMOJI_HOME} {home_button_text}", callback_data="back_start")]]; await query.edit_message_text("❌ An error occurred.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        except Exception as inner_e: logger.error(f"Failed fallback in handle_shop: {inner_e}")
 
-        if target_type == 'all':
-            c.execute("SELECT user_id FROM users")
-            user_ids = [row['user_id'] for row in c.fetchall()]
-            logger.info(f"Broadcast target 'all': Found {len(user_ids)} users.")
 
-        elif target_type == 'status' and target_value:
-            status = str(target_value).lower()
-            min_purchases, max_purchases = -1, -1
-            # Use the status string including emoji for matching (rely on English definition)
-            if status == LANGUAGES['en'].get("broadcast_status_vip", "VIP 👑").lower(): min_purchases = 10; max_purchases = float('inf')
-            elif status == LANGUAGES['en'].get("broadcast_status_regular", "Regular ⭐").lower(): min_purchases = 5; max_purchases = 9
-            elif status == LANGUAGES['en'].get("broadcast_status_new", "New 🌱").lower(): min_purchases = 0; max_purchases = 4
+# --- Modified handle_city_selection ---
+async def handle_city_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    user_id = query.from_user.id # Added for logging
+    lang, lang_data = _get_lang_data(context)
 
-            if min_purchases != -1:
-                 if max_purchases == float('inf'):
-                     c.execute("SELECT user_id FROM users WHERE total_purchases >= ?", (min_purchases,))
-                 else:
-                     c.execute("SELECT user_id FROM users WHERE total_purchases BETWEEN ? AND ?", (min_purchases, max_purchases))
-                 user_ids = [row['user_id'] for row in c.fetchall()]
-                 logger.info(f"Broadcast target status '{target_value}': Found {len(user_ids)} users.")
-            else: logger.warning(f"Invalid status value for broadcast: {target_value}")
+    if not params:
+        logger.warning(f"handle_city_selection called without city_id for user {user_id}.")
+        await query.answer("Error: City ID missing.", show_alert=True)
+        return
+    city_id = params[0]
+    city_name = CITIES.get(city_id)
+    if not city_name:
+        error_city_not_found = lang_data.get("error_city_not_found", "Error: City not found.")
+        logger.warning(f"City ID {city_id} not found in CITIES for user {user_id}.")
+        await query.edit_message_text(f"❌ {error_city_not_found}", parse_mode=None)
+        return await handle_shop(update, context) # Go back to city selection
 
-        elif target_type == 'city' and target_value:
-            city_name = str(target_value)
-            # Find users whose *most recent* purchase was in this city
-            c.execute("""
-                SELECT user_id
-                FROM purchases p1
-                WHERE city = ? AND purchase_date = (
-                    SELECT MAX(purchase_date)
-                    FROM purchases p2
-                    WHERE p1.user_id = p2.user_id
-                )
-            """, (city_name,))
-            user_ids = [row['user_id'] for row in c.fetchall()]
-            logger.info(f"Broadcast target city '{city_name}': Found {len(user_ids)} users based on last purchase.")
+    districts_in_city = DISTRICTS.get(city_id, {})
+    back_cities_button = lang_data.get("back_cities_button", "Back to Cities")
+    home_button = lang_data.get("home_button", "Home")
+    no_districts_msg = lang_data.get("no_districts_available", "No districts available yet for this city.")
+    no_products_in_districts_msg = lang_data.get("no_products_in_city_districts", "No products currently available in any district of this city.")
+    choose_district_prompt = lang_data.get("choose_district_prompt", "Choose a district:")
+    error_loading_districts = lang_data.get("error_loading_districts", "Error loading districts. Please try again.")
+    available_label_short = lang_data.get("available_label_short", "Av") # Get short available label
 
-        elif target_type == 'inactive' and target_value:
+    keyboard = []
+    message_text_parts = [f"{EMOJI_CITY} {city_name}\n\n"] # Start message
+    districts_with_products_info = [] # Store tuples: (d_id, dist_name)
+
+    if not districts_in_city:
+        # If no districts are configured AT ALL for the city
+        keyboard_nav = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_cities_button}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
+        await query.edit_message_text(f"{EMOJI_CITY} {city_name}\n\n{no_districts_msg}", reply_markup=InlineKeyboardMarkup(keyboard_nav), parse_mode=None)
+        return
+    else:
+        # If districts are configured, check each one for products
+        sorted_district_ids = sorted(districts_in_city.keys(), key=lambda dist_id: districts_in_city.get(dist_id, ''))
+        conn = None
+        try:
+            conn = get_db_connection()
+            c = conn.cursor()
+
+            for d_id in sorted_district_ids:
+                dist_name = districts_in_city.get(d_id)
+                if dist_name:
+                    # NEW Query for detailed product summary in this district
+                    c.execute("""
+                        SELECT product_type, size, price, COUNT(*) as quantity
+                        FROM products
+                        WHERE city = ? AND district = ? AND available > reserved
+                        GROUP BY product_type, size, price
+                        ORDER BY product_type, price, size
+                    """, (city_name, dist_name))
+                    products_in_district = c.fetchall()
+
+                    if products_in_district:
+                        # Add district header to message text (using Markdown for bold)
+                        # Use helpers.escape_markdown to be safe with district names
+                        escaped_dist_name = helpers.escape_markdown(dist_name, version=2)
+                        message_text_parts.append(f"{EMOJI_DISTRICT} *{escaped_dist_name}*:\n")
+                        # Add product details to message text
+                        for prod in products_in_district:
+                            prod_emoji = PRODUCT_TYPES.get(prod['product_type'], DEFAULT_PRODUCT_EMOJI)
+                            price_str = format_currency(prod['price'])
+                            # Escape potentially problematic characters in type/size/price/count
+                            escaped_type = helpers.escape_markdown(prod['product_type'], version=2)
+                            escaped_size = helpers.escape_markdown(prod['size'], version=2)
+                            escaped_price = helpers.escape_markdown(price_str, version=2)
+                            escaped_qty = helpers.escape_markdown(str(prod['quantity']), version=2)
+                            escaped_avail = helpers.escape_markdown(available_label_short, version=2)
+                            message_text_parts.append(f"  • {prod_emoji} {escaped_type} {escaped_size} \\({escaped_price}€\\) \\- {escaped_qty} {escaped_avail}\n")
+                        message_text_parts.append("\n") # Add space after district info
+                        # Add district to list for button creation
+                        districts_with_products_info.append((d_id, dist_name))
+                    # else: District has no products, do nothing (it's skipped)
+                else:
+                    logger.warning(f"District name missing for ID {d_id} in city {city_id} (handle_city_selection)")
+
+        except sqlite3.Error as e:
+            logger.error(f"DB error checking product availability for districts in city {city_name} (ID: {city_id}) for user {user_id}: {e}")
+            keyboard_error = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_cities_button}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
+            await query.edit_message_text(f"{EMOJI_CITY} {city_name}\n\n❌ {error_loading_districts}", reply_markup=InlineKeyboardMarkup(keyboard_error), parse_mode=None)
+            if conn: conn.close()
+            return # Stop processing on DB error
+        finally:
+            if conn:
+                conn.close()
+
+        # After checking all districts:
+        if not districts_with_products_info:
+            # If we looped through all configured districts but none had products
+            keyboard_nav = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_cities_button}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
+            await query.edit_message_text(f"{EMOJI_CITY} {city_name}\n\n{no_products_in_districts_msg}", reply_markup=InlineKeyboardMarkup(keyboard_nav), parse_mode=None)
+        else:
+            message_text_parts.append(f"\n{choose_district_prompt}") # Add prompt below details
+            final_message = "".join(message_text_parts)
+            # Create buttons ONLY for districts with products
+            for d_id, dist_name in districts_with_products_info:
+                 keyboard.append([InlineKeyboardButton(f"{EMOJI_DISTRICT} {dist_name}", callback_data=f"dist|{city_id}|{d_id}")])
+
+            keyboard.append([InlineKeyboardButton(f"{EMOJI_BACK} {back_cities_button}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")])
+
+            # Check length and edit message
+            # Use Markdown V2 now for bold districts
             try:
-                days_inactive = int(target_value)
-                if days_inactive <= 0: raise ValueError("Days must be positive")
-                cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_inactive)
-                cutoff_iso = cutoff_date.isoformat()
+                if len(final_message) > 4000:
+                    # Find a good place to truncate (e.g., before the last district's details)
+                    # This is a basic approach, might cut mid-district if one is very long
+                    trunc_point = final_message.rfind(f"\n{EMOJI_DISTRICT}", 0, 3900)
+                    if trunc_point != -1:
+                        final_message = final_message[:trunc_point] + "\n\n\\[\\.\\.\\. Message truncated \\.\\.\\.\\]"
+                    else: # Fallback if no good split point found
+                        final_message = final_message[:4000] + "\n\n\\[\\.\\.\\. Message truncated \\.\\.\\.\\]"
+                    logger.warning(f"District selection message for user {user_id} city {city_name} truncated.")
 
-                # Find users whose last purchase date is older than the cutoff date OR have no purchases
-                # 1. Get users with last purchase older than cutoff
-                c.execute("""
-                    SELECT user_id
-                    FROM purchases p1
-                    WHERE purchase_date = (
-                        SELECT MAX(purchase_date)
-                        FROM purchases p2
-                        WHERE p1.user_id = p2.user_id
-                    ) AND purchase_date < ?
-                """, (cutoff_iso,))
-                inactive_users = {row['user_id'] for row in c.fetchall()}
-
-                # 2. Get users with zero purchases (who implicitly meet the inactive criteria)
-                c.execute("SELECT user_id FROM users WHERE total_purchases = 0")
-                zero_purchase_users = {row['user_id'] for row in c.fetchall()}
-
-                # Combine the sets
-                user_ids_set = inactive_users.union(zero_purchase_users)
-                user_ids = list(user_ids_set)
-                logger.info(f"Broadcast target inactive >= {days_inactive} days: Found {len(user_ids)} users.")
-
-            except (ValueError, TypeError):
-                logger.error(f"Invalid number of days for inactive broadcast: {target_value}")
-
-        else:
-            logger.error(f"Unknown broadcast target type or missing value: type={target_type}, value={target_value}")
-
-    except sqlite3.Error as e:
-        logger.error(f"DB error fetching users for broadcast ({target_type}, {target_value}): {e}", exc_info=True)
-    except Exception as e:
-        logger.error(f"Unexpected error fetching users for broadcast: {e}", exc_info=True)
-    finally:
-        if conn: conn.close()
-
-    return user_ids
+                await query.edit_message_text(
+                    final_message,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode=ParseMode.MARKDOWN_V2 # Use Markdown
+                )
+            except telegram_error.BadRequest as e:
+                if "message is not modified" not in str(e).lower():
+                    logger.error(f"Error editing district selection message (Markdown): {e}")
+                    # Fallback to plain text if Markdown fails
+                    try:
+                         plain_text_message = "".join(message_text_parts).replace('*','') # Basic removal of bold
+                         if len(plain_text_message) > 4000: plain_text_message = plain_text_message[:4000] + "\n\n[... Message truncated ...]"
+                         await query.edit_message_text(plain_text_message, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+                    except Exception as fallback_e:
+                         logger.error(f"Failed fallback edit for district selection: {fallback_e}")
+                         await query.answer("Error displaying districts.", show_alert=True)
+                else:
+                    await query.answer() # Acknowledge if not modified
 
 
-# --- Admin Action Logging (Synchronous) ---
-def log_admin_action(admin_id: int, action: str, target_user_id: int | None = None, reason: str | None = None, amount_change: float | None = None, old_value=None, new_value=None):
-    """Logs an administrative action to the admin_log table."""
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("""
-                INSERT INTO admin_log (timestamp, admin_id, target_user_id, action, reason, amount_change, old_value, new_value)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                datetime.now(timezone.utc).isoformat(),
-                admin_id,
-                target_user_id,
-                action,
-                reason,
-                amount_change,
-                str(old_value) if old_value is not None else None,
-                str(new_value) if new_value is not None else None
-            ))
-            conn.commit()
-            logger.info(f"Admin Action Logged: Admin={admin_id}, Action='{action}', Target={target_user_id}, Reason='{reason}', Amount={amount_change}, Old='{old_value}', New='{new_value}'")
-    except sqlite3.Error as e:
-        logger.error(f"Failed to log admin action: {e}", exc_info=True)
-    except Exception as e:
-        logger.error(f"Unexpected error logging admin action: {e}", exc_info=True)
+async def handle_district_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    lang, lang_data = _get_lang_data(context)
+    if not params or len(params) < 2: logger.warning("handle_district_selection missing params."); await query.answer("Error: City/District ID missing.", show_alert=True); return
+    city_id, dist_id = params[0], params[1]
+    city = CITIES.get(city_id); district = DISTRICTS.get(city_id, {}).get(dist_id)
 
-# --- Welcome Message Helpers (Synchronous) ---
-def load_active_welcome_message() -> str:
-    """Loads the currently active welcome message template from the database."""
+    if not city or not district: error_district_city_not_found = lang_data.get("error_district_city_not_found", "Error: District or city not found."); await query.edit_message_text(f"❌ {error_district_city_not_found}", parse_mode=None); return await handle_shop(update, context)
+
+    back_districts_button = lang_data.get("back_districts_button", "Back to Districts"); home_button = lang_data.get("home_button", "Home")
+    no_types_msg = lang_data.get("no_types_available", "No product types currently available here."); select_type_prompt = lang_data.get("select_type_prompt", "Select product type:")
+    error_loading_types = lang_data.get("error_loading_types", "Error: Failed to Load Product Types"); error_unexpected = lang_data.get("error_unexpected", "An unexpected error occurred")
+
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
-        c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
-        setting_row = c.fetchone()
-        active_name = setting_row['setting_value'] if setting_row else "default"
+        c.execute("SELECT DISTINCT product_type FROM products WHERE city = ? AND district = ? AND available > reserved ORDER BY product_type", (city, district))
+        available_types = [row['product_type'] for row in c.fetchall()]
 
-        c.execute("SELECT template_text FROM welcome_messages WHERE name = ?", (active_name,))
-        template_row = c.fetchone()
-        if template_row:
-            logger.info(f"Loaded active welcome message template: '{active_name}'")
-            return template_row['template_text']
+        if not available_types:
+            keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_districts_button}", callback_data=f"city|{city_id}"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
+            await query.edit_message_text(f"{EMOJI_CITY} {city}\n{EMOJI_DISTRICT} {district}\n\n{no_types_msg}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
         else:
-            # If active template name points to a non-existent template, try fallback
-            logger.warning(f"Active welcome message template '{active_name}' not found. Trying 'default'.")
-            c.execute("SELECT template_text FROM welcome_messages WHERE name = ?", ("default",))
-            template_row = c.fetchone()
-            if template_row:
-                logger.info("Loaded fallback 'default' welcome message template.")
-                # Optionally update setting to default?
-                # c.execute("UPDATE bot_settings SET setting_value = ? WHERE setting_key = ?", ("default", "active_welcome_message_name"))
-                # conn.commit()
-                return template_row['template_text']
-            else:
-                # If even default is missing
-                logger.error("FATAL: Default welcome message template 'default' not found in DB! Using hardcoded default.")
-                return DEFAULT_WELCOME_MESSAGE
-
-    except sqlite3.Error as e:
-        logger.error(f"DB error loading active welcome message: {e}", exc_info=True)
-        return DEFAULT_WELCOME_MESSAGE
-    except Exception as e:
-        logger.error(f"Unexpected error loading welcome message: {e}", exc_info=True)
-        return DEFAULT_WELCOME_MESSAGE
+            keyboard = []
+            for pt in available_types:
+                emoji = PRODUCT_TYPES.get(pt, DEFAULT_PRODUCT_EMOJI)
+                keyboard.append([InlineKeyboardButton(f"{emoji} {pt}", callback_data=f"type|{city_id}|{dist_id}|{pt}")])
+            # Go back to city selection (which now shows the product list)
+            keyboard.append([InlineKeyboardButton(f"{EMOJI_BACK} {back_districts_button}", callback_data=f"city|{city_id}"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")])
+            await query.edit_message_text(f"{EMOJI_CITY} {city}\n{EMOJI_DISTRICT} {district}\n\n{select_type_prompt}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    except sqlite3.Error as e: logger.error(f"DB error fetching product types {city}/{district}: {e}", exc_info=True); await query.edit_message_text(f"❌ {error_loading_types}", parse_mode=None)
+    except Exception as e: logger.error(f"Unexpected error in handle_district_selection: {e}", exc_info=True); await query.edit_message_text(f"❌ {error_unexpected}", parse_mode=None)
     finally:
         if conn: conn.close()
 
-def get_welcome_message_templates() -> list[dict]:
-    """Fetches all welcome message templates (name and text)."""
-    templates = []
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT name, template_text FROM welcome_messages ORDER BY name")
-            templates = [dict(row) for row in c.fetchall()]
-    except sqlite3.Error as e:
-        logger.error(f"DB error fetching welcome message templates: {e}", exc_info=True)
-    return templates
 
-def add_welcome_message_template(name: str, template_text: str) -> bool:
-    """Adds a new welcome message template."""
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("INSERT INTO welcome_messages (name, template_text) VALUES (?, ?)", (name, template_text))
-            conn.commit()
-            logger.info(f"Added welcome message template: '{name}'")
-            return True
-    except sqlite3.IntegrityError:
-        logger.warning(f"Attempted to add duplicate welcome message template name: '{name}'")
-        return False
-    except sqlite3.Error as e:
-        logger.error(f"DB error adding welcome message template '{name}': {e}", exc_info=True)
-        return False
+async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    lang, lang_data = _get_lang_data(context)
+    if not params or len(params) < 3: logger.warning("handle_type_selection missing params."); await query.answer("Error: City/District/Type missing.", show_alert=True); return
+    city_id, dist_id, p_type = params
+    city = CITIES.get(city_id); district = DISTRICTS.get(city_id, {}).get(dist_id)
 
-def update_welcome_message_template(name: str, new_template_text: str) -> bool:
-    """Updates the text of an existing welcome message template."""
+    if not city or not district: error_district_city_not_found = lang_data.get("error_district_city_not_found", "Error: District or city not found."); await query.edit_message_text(f"❌ {error_district_city_not_found}", parse_mode=None); return await handle_shop(update, context)
+
+    product_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
+    back_types_button = lang_data.get("back_types_button", "Back to Types"); home_button = lang_data.get("home_button", "Home")
+    no_items_of_type = lang_data.get("no_items_of_type", "No items of this type currently available here.")
+    available_options_prompt = lang_data.get("available_options_prompt", "Available options:")
+    error_loading_products = lang_data.get("error_loading_products", "Error: Failed to Load Products"); error_unexpected = lang_data.get("error_unexpected", "An unexpected error occurred")
+
+    conn = None
     try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            result = c.execute("UPDATE welcome_messages SET template_text = ? WHERE name = ?", (new_template_text, name))
-            conn.commit()
-            if result.rowcount > 0:
-                logger.info(f"Updated welcome message template: '{name}'")
-                return True
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT size, price, COUNT(*) as count_available FROM products WHERE city = ? AND district = ? AND product_type = ? AND available > reserved GROUP BY size, price ORDER BY price", (city, district, p_type))
+        products = c.fetchall()
+
+        if not products:
+            keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_types_button}", callback_data=f"dist|{city_id}|{dist_id}"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
+            await query.edit_message_text(f"{EMOJI_CITY} {city}\n{EMOJI_DISTRICT} {district}\n{product_emoji} {p_type}\n\n{no_items_of_type}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        else:
+            keyboard = []
+            available_label_short = lang_data.get("available_label_short", "Av")
+            for row in products:
+                size, price, count = row['size'], Decimal(str(row['price'])), row['count_available']
+                price_str_formatted = format_currency(price)
+                price_str_callback = f"{price:.2f}"
+                button_text = f"{product_emoji} {size} ({price_str_formatted}€) - {available_label_short}: {count}"
+                callback_data = f"product|{city_id}|{dist_id}|{p_type}|{size}|{price_str_callback}"
+                keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+
+            keyboard.append([InlineKeyboardButton(f"{EMOJI_BACK} {back_types_button}", callback_data=f"dist|{city_id}|{dist_id}"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")])
+            await query.edit_message_text(f"{EMOJI_CITY} {city}\n{EMOJI_DISTRICT} {district}\n{product_emoji} {p_type}\n\n{available_options_prompt}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    except sqlite3.Error as e: logger.error(f"DB error fetching products {city}/{district}/{p_type}: {e}", exc_info=True); await query.edit_message_text(f"❌ {error_loading_products}", parse_mode=None)
+    except Exception as e: logger.error(f"Unexpected error in handle_type_selection: {e}", exc_info=True); await query.edit_message_text(f"❌ {error_unexpected}", parse_mode=None)
+    finally:
+        if conn: conn.close()
+
+
+async def handle_product_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    lang, lang_data = _get_lang_data(context)
+    if not params or len(params) < 5: logger.warning("handle_product_selection missing params."); await query.answer("Error: Incomplete product data.", show_alert=True); return
+    city_id, dist_id, p_type, size, price_str = params
+
+    try: price = Decimal(price_str)
+    except ValueError: logger.warning(f"Invalid price format: {price_str}"); await query.edit_message_text("❌ Error: Invalid product data.", parse_mode=None); return
+
+    city = CITIES.get(city_id); district = DISTRICTS.get(city_id, {}).get(dist_id)
+    if not city or not district: error_location_mismatch = lang_data.get("error_location_mismatch", "Error: Location data mismatch."); await query.edit_message_text(f"❌ {error_location_mismatch}", parse_mode=None); return await handle_shop(update, context)
+
+    product_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
+    theme_name = context.user_data.get("theme", "default")
+    theme = THEMES.get(theme_name, THEMES["default"])
+    basket_emoji = theme.get('basket', EMOJI_BASKET)
+
+    price_label = lang_data.get("price_label", "Price"); available_label_long = lang_data.get("available_label_long", "Available")
+    back_options_button = lang_data.get("back_options_button", "Back to Options"); home_button = lang_data.get("home_button", "Home")
+    drop_unavailable_msg = lang_data.get("drop_unavailable", "Drop Unavailable! This option just sold out or was reserved.")
+    add_to_basket_button = lang_data.get("add_to_basket_button", "Add to Basket")
+    error_loading_details = lang_data.get("error_loading_details", "Error: Failed to Load Product Details"); error_unexpected = lang_data.get("error_unexpected", "An unexpected error occurred")
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) as count FROM products WHERE city = ? AND district = ? AND product_type = ? AND size = ? AND price = ? AND available > reserved", (city, district, p_type, size, float(price)))
+        available_count_result = c.fetchone(); available_count = available_count_result['count'] if available_count_result else 0
+
+        if available_count <= 0:
+            keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_options_button}", callback_data=f"type|{city_id}|{dist_id}|{p_type}"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
+            await query.edit_message_text(f"❌ {drop_unavailable_msg}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        else:
+            price_formatted = format_currency(price)
+            msg = (f"{EMOJI_CITY} {city} | {EMOJI_DISTRICT} {district}\n"
+                   f"{product_emoji} {p_type} - {size}\n"
+                   f"{EMOJI_PRICE} {price_label}: {price_formatted} EUR\n"
+                   f"{EMOJI_QUANTITY} {available_label_long}: {available_count}")
+            add_callback = f"add|{city_id}|{dist_id}|{p_type}|{size}|{price_str}"
+            back_callback = f"type|{city_id}|{dist_id}|{p_type}"
+            keyboard = [
+                [InlineKeyboardButton(f"{basket_emoji} {add_to_basket_button}", callback_data=add_callback)],
+                [InlineKeyboardButton(f"{EMOJI_BACK} {back_options_button}", callback_data=back_callback), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]
+            ]
+            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    except sqlite3.Error as e: logger.error(f"DB error checking availability {city}/{district}/{p_type}/{size}: {e}", exc_info=True); await query.edit_message_text(f"❌ {error_loading_details}", parse_mode=None)
+    except Exception as e: logger.error(f"Unexpected error in handle_product_selection: {e}", exc_info=True); await query.edit_message_text(f"❌ {error_unexpected}", parse_mode=None)
+    finally:
+        if conn: conn.close()
+
+
+async def handle_add_to_basket(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    lang, lang_data = _get_lang_data(context)
+    if not params or len(params) < 5: logger.warning("handle_add_to_basket missing params."); await query.answer("Error: Incomplete product data.", show_alert=True); return
+    city_id, dist_id, p_type, size, price_str = params
+
+    try: price = Decimal(price_str)
+    except ValueError: logger.warning(f"Invalid price format add_to_basket: {price_str}"); await query.edit_message_text("❌ Error: Invalid product data.", parse_mode=None); return
+
+    city = CITIES.get(city_id); district = DISTRICTS.get(city_id, {}).get(dist_id)
+    if not city or not district: error_location_mismatch = lang_data.get("error_location_mismatch", "Error: Location data mismatch."); await query.edit_message_text(f"❌ {error_location_mismatch}", parse_mode=None); return await handle_shop(update, context)
+
+    user_id = query.from_user.id
+    product_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
+    theme_name = context.user_data.get("theme", "default"); theme = THEMES.get(theme_name, THEMES["default"])
+    basket_emoji = theme.get('basket', EMOJI_BASKET)
+    product_id_reserved = None; conn = None
+
+    back_options_button = lang_data.get("back_options_button", "Back to Options"); home_button = lang_data.get("home_button", "Home")
+    out_of_stock_msg = lang_data.get("out_of_stock", "Out of Stock! Sorry, the last one was taken or reserved.")
+    pay_now_button_text = lang_data.get("pay_now_button", "Pay Now"); top_up_button_text = lang_data.get("top_up_button", "Top Up")
+    view_basket_button_text = lang_data.get("view_basket_button", "View Basket"); clear_basket_button_text = lang_data.get("clear_basket_button", "Clear Basket")
+    shop_more_button_text = lang_data.get("shop_more_button", "Shop More"); expires_label = lang_data.get("expires_label", "Expires")
+    error_adding_db = lang_data.get("error_adding_db", "Error: Database issue adding item."); error_adding_unexpected = lang_data.get("error_adding_unexpected", "Error: An unexpected issue occurred.")
+    added_msg_template = lang_data.get("added_to_basket", "✅ Item Reserved!\n\n{item} is in your basket for {timeout} minutes! ⏳")
+    pay_msg_template = lang_data.get("pay", "💳 Total to Pay: {amount} EUR")
+    apply_discount_button_text = lang_data.get("apply_discount_button", "Apply Discount Code")
+
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("BEGIN EXCLUSIVE")
+        c.execute("SELECT id FROM products WHERE city = ? AND district = ? AND product_type = ? AND size = ? AND price = ? AND available > reserved ORDER BY id LIMIT 1", (city, district, p_type, size, float(price)))
+        product_row = c.fetchone()
+
+        if not product_row:
+            conn.rollback(); keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_options_button}", callback_data=f"type|{city_id}|{dist_id}|{p_type}"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]; await query.edit_message_text(f"❌ {out_of_stock_msg}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None); return
+
+        product_id_reserved = product_row['id']
+        c.execute("UPDATE products SET reserved = reserved + 1 WHERE id = ?", (product_id_reserved,))
+        c.execute("SELECT basket FROM users WHERE user_id = ?", (user_id,))
+        user_basket_row = c.fetchone(); current_basket_str = user_basket_row['basket'] if user_basket_row else ''
+        timestamp = time.time(); new_item_str = f"{product_id_reserved}:{timestamp}"
+        new_basket_str = f"{current_basket_str},{new_item_str}" if current_basket_str else new_item_str
+        c.execute("UPDATE users SET basket = ? WHERE user_id = ?", (new_basket_str, user_id))
+        conn.commit()
+
+        if "basket" not in context.user_data or not isinstance(context.user_data["basket"], list): context.user_data["basket"] = []
+        context.user_data["basket"].append({"product_id": product_id_reserved, "price": price, "timestamp": timestamp})
+        logger.info(f"User {user_id} added product {product_id_reserved} to basket.")
+
+        timeout_minutes = BASKET_TIMEOUT // 60
+        current_basket_list = context.user_data["basket"]
+
+        original_total = sum(item['price'] for item in current_basket_list)
+        final_total = original_total; discount_amount = Decimal('0.0')
+        applied_discount_info = context.user_data.get('applied_discount')
+        pay_msg_str = ""
+
+        if applied_discount_info:
+             code_valid, _, discount_details = validate_discount_code(applied_discount_info['code'], float(original_total))
+             if code_valid and discount_details:
+                 discount_amount = Decimal(str(discount_details['discount_amount']))
+                 final_total = Decimal(str(discount_details['final_total']))
+                 context.user_data['applied_discount']['amount'] = float(discount_amount)
+                 context.user_data['applied_discount']['final_total'] = float(final_total)
+
+        final_total_str = format_currency(final_total)
+        pay_msg_str = pay_msg_template.format(amount=final_total_str)
+        if discount_amount > 0:
+             original_total_str = format_currency(original_total)
+             discount_amount_str = format_currency(discount_amount)
+             pay_msg_str = f"~{original_total_str} EUR~ - {discount_amount_str} EUR Discount\n{pay_msg_str}"
+
+        item_price_str = format_currency(price)
+        item_desc = f"{product_emoji} {p_type} {size} ({item_price_str}€)"
+        expiry_dt = datetime.fromtimestamp(timestamp + BASKET_TIMEOUT); expiry_time_str = expiry_dt.strftime('%H:%M:%S')
+        reserved_msg = (added_msg_template.format(timeout=timeout_minutes, item=item_desc) + "\n\n" + f"⏳ {expires_label}: {expiry_time_str}\n\n" + f"{pay_msg_str}")
+        district_btn_text = district[:15]
+
+        keyboard = [
+            [InlineKeyboardButton(f"💳 {pay_now_button_text}", callback_data="confirm_pay"), InlineKeyboardButton(f"{EMOJI_REFILL} {top_up_button_text}", callback_data="refill")],
+            [InlineKeyboardButton(f"{basket_emoji} {view_basket_button_text} ({len(current_basket_list)})", callback_data="view_basket"), InlineKeyboardButton(f"{basket_emoji} {clear_basket_button_text}", callback_data="clear_basket")],
+            [InlineKeyboardButton(f"{EMOJI_DISCOUNT} {apply_discount_button_text}", callback_data="apply_discount_start")],
+            [InlineKeyboardButton(f"➕ {shop_more_button_text} ({district_btn_text})", callback_data=f"dist|{city_id}|{dist_id}")],
+            [InlineKeyboardButton(f"{EMOJI_BACK} {back_options_button}", callback_data=f"type|{city_id}|{dist_id}|{p_type}"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]
+        ]
+        await query.edit_message_text(reserved_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+    except sqlite3.Error as e:
+        if conn and conn.in_transaction: conn.rollback()
+        logger.error(f"DB error adding product {product_id_reserved if product_id_reserved else 'N/A'} user {user_id}: {e}", exc_info=True)
+        await query.edit_message_text(f"❌ {error_adding_db}", parse_mode=None)
+    except Exception as e:
+        if conn and conn.in_transaction: conn.rollback()
+        logger.error(f"Unexpected error adding item user {user_id}: {e}", exc_info=True)
+        await query.edit_message_text(f"❌ {error_adding_unexpected}", parse_mode=None)
+    finally:
+        if conn: conn.close()
+
+
+# --- Profile Handlers ---
+# (handle_profile unchanged)
+async def handle_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    user_id = query.from_user.id
+    lang, lang_data = _get_lang_data(context)
+    theme_name = context.user_data.get("theme", "default")
+    theme = THEMES.get(theme_name, THEMES["default"])
+    basket_emoji = theme.get('basket', EMOJI_BASKET)
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT balance, total_purchases FROM users WHERE user_id = ?", (user_id,))
+        result = c.fetchone()
+        if not result: logger.error(f"User {user_id} not found in DB for profile."); await query.edit_message_text("❌ Error: Could not load profile.", parse_mode=None); return
+        balance, purchases = Decimal(str(result['balance'])), result['total_purchases']
+
+        clear_expired_basket(context, user_id)
+        basket_count = len(context.user_data.get("basket", []))
+        status = get_user_status(purchases); progress_bar = get_progress_bar(purchases); balance_str = format_currency(balance)
+        status_label = lang_data.get("status_label", "Status"); balance_label = lang_data.get("balance_label", "Balance")
+        purchases_label = lang_data.get("purchases_label", "Total Purchases"); basket_label = lang_data.get("basket_label", "Basket Items")
+        profile_title = lang_data.get("profile_title", "Your Profile")
+        profile_msg = (f"🎉 {profile_title}\n\n" f"👤 {status_label}: {status} {progress_bar}\n" f"💰 {balance_label}: {balance_str} EUR\n"
+                       f"📦 {purchases_label}: {purchases}\n" f"🛒 {basket_label}: {basket_count}")
+
+        top_up_button_text = lang_data.get("top_up_button", "Top Up"); view_basket_button_text = lang_data.get("view_basket_button", "View Basket")
+        purchase_history_button_text = lang_data.get("purchase_history_button", "Purchase History"); home_button_text = lang_data.get("home_button", "Home")
+        keyboard = [
+            [InlineKeyboardButton(f"{EMOJI_REFILL} {top_up_button_text}", callback_data="refill"), InlineKeyboardButton(f"{basket_emoji} {view_basket_button_text} ({basket_count})", callback_data="view_basket")],
+            [InlineKeyboardButton(f"📜 {purchase_history_button_text}", callback_data="view_history")],
+            [InlineKeyboardButton(f"{EMOJI_HOME} {home_button_text}", callback_data="back_start")]
+        ]
+        await query.edit_message_text(profile_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+    except sqlite3.Error as e: logger.error(f"DB error loading profile user {user_id}: {e}", exc_info=True); await query.edit_message_text("❌ Error: Failed to Load Profile.", parse_mode=None)
+    except telegram_error.BadRequest as e:
+        if "message is not modified" not in str(e).lower(): logger.error(f"Unexpected BadRequest handle_profile user {user_id}: {e}", exc_info=True); await query.edit_message_text("❌ Error: Unexpected issue.", parse_mode=None)
+        else: await query.answer()
+    except Exception as e: logger.error(f"Unexpected error handle_profile user {user_id}: {e}", exc_info=True); await query.edit_message_text("❌ Error: Unexpected issue.", parse_mode=None)
+    finally:
+        if conn: conn.close()
+
+# --- Discount Validation (Synchronous) ---
+# (validate_discount_code unchanged)
+def validate_discount_code(code_text: str, current_total_float: float) -> tuple[bool, str, dict | None]:
+    lang_data = LANGUAGES.get('en', {}) # Use English for internal messages
+    no_code_msg = lang_data.get("no_code_provided", "No code provided.")
+    not_found_msg = lang_data.get("discount_code_not_found", "Discount code not found.")
+    inactive_msg = lang_data.get("discount_code_inactive", "This discount code is inactive.")
+    expired_msg = lang_data.get("discount_code_expired", "This discount code has expired.")
+    invalid_expiry_msg = lang_data.get("invalid_code_expiry_data", "Invalid code expiry data.")
+    limit_reached_msg = lang_data.get("code_limit_reached", "Code reached usage limit.")
+    internal_error_type_msg = lang_data.get("internal_error_discount_type", "Internal error processing discount type.")
+    db_error_msg = lang_data.get("db_error_validating_code", "Database error validating code.")
+    unexpected_error_msg = lang_data.get("unexpected_error_validating_code", "An unexpected error occurred.")
+    code_applied_msg_template = lang_data.get("code_applied_message", "Code '{code}' ({value}) applied. Discount: -{amount} EUR")
+
+    if not code_text: return False, no_code_msg, None
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT * FROM discount_codes WHERE code = ?", (code_text,))
+        code_data = c.fetchone()
+
+        if not code_data: return False, not_found_msg, None
+        if not code_data['is_active']: return False, inactive_msg, None
+        if code_data['expiry_date']:
+            try:
+                expiry_dt = datetime.fromisoformat(code_data['expiry_date'])
+                if expiry_dt.tzinfo is None: expiry_dt = expiry_dt.astimezone()
+                if datetime.now(expiry_dt.tzinfo) > expiry_dt: return False, expired_msg, None
+            except ValueError: logger.warning(f"Invalid expiry_date format DB code {code_data['code']}"); return False, invalid_expiry_msg, None
+        if code_data['max_uses'] is not None and code_data['uses_count'] >= code_data['max_uses']: return False, limit_reached_msg, None
+
+        discount_amount = 0.0
+        dtype = code_data['discount_type']; value = Decimal(str(code_data['value']))
+        current_total_decimal = Decimal(str(current_total_float))
+
+        if dtype == 'percentage': discount_amount = (current_total_decimal * value) / Decimal('100.0')
+        elif dtype == 'fixed': discount_amount = value
+        else: logger.error(f"Unknown discount type '{dtype}' code {code_data['code']}"); return False, internal_error_type_msg, None
+
+        discount_amount = min(discount_amount, current_total_decimal)
+        final_total_decimal = max(Decimal('0.0'), current_total_decimal - discount_amount)
+        discount_amount_float = round(float(discount_amount), 2)
+        final_total_float = round(float(final_total_decimal), 2)
+
+        details = {'code': code_data['code'], 'type': dtype, 'value': float(value), 'discount_amount': discount_amount_float, 'final_total': final_total_float}
+        code_display = code_data['code']; value_str_display = format_discount_value(dtype, float(value))
+        amount_str_display = format_currency(discount_amount_float)
+        message = code_applied_msg_template.format(code=code_display, value=value_str_display, amount=amount_str_display)
+        return True, message, details
+
+    except sqlite3.Error as e: logger.error(f"DB error validating discount code '{code_text}': {e}", exc_info=True); return False, db_error_msg, None
+    except Exception as e: logger.error(f"Unexpected error validating code '{code_text}': {e}", exc_info=True); return False, unexpected_error_msg, None
+    finally:
+        if conn: conn.close()
+
+# --- Basket Handlers ---
+# (handle_view_basket unchanged)
+async def handle_view_basket(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    user_id = query.from_user.id
+    lang, lang_data = _get_lang_data(context)
+    theme_name = context.user_data.get("theme", "default"); theme = THEMES.get(theme_name, THEMES["default"]); basket_emoji = theme.get('basket', EMOJI_BASKET)
+
+    clear_expired_basket(context, user_id)
+    basket = context.user_data.get("basket", [])
+    applied_discount_info = context.user_data.get('applied_discount')
+    discount_code_to_revalidate = applied_discount_info.get('code') if applied_discount_info else None
+
+    if not basket:
+        context.user_data.pop('applied_discount', None)
+        basket_empty_msg = lang_data.get("basket_empty", "🛒 Your Basket is Empty!")
+        add_items_prompt = lang_data.get("add_items_prompt", "Add items to start shopping!")
+        shop_button_text = lang_data.get("shop_button", "Shop"); home_button_text = lang_data.get("home_button", "Home")
+        full_empty_msg = basket_empty_msg + "\n\n" + add_items_prompt + " 😊"
+        keyboard = [[InlineKeyboardButton(f"{EMOJI_SHOP} {shop_button_text}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button_text}", callback_data="back_start")]]
+        try: await query.edit_message_text(full_empty_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        except telegram_error.BadRequest as e:
+             if "message is not modified" not in str(e).lower(): logger.error(f"Error editing empty basket msg: {e}")
+             else: await query.answer()
+        return
+
+    msg = f"{basket_emoji} {lang_data.get('your_basket_title', 'Your Basket')}\n\n"
+    original_total = Decimal('0.0')
+    keyboard_items = []; product_db_details = {}; conn = None
+
+    try:
+        product_ids_in_basket = list(set(item['product_id'] for item in basket))
+        if product_ids_in_basket:
+             conn = get_db_connection()
+             c = conn.cursor()
+             placeholders = ','.join('?' for _ in product_ids_in_basket)
+             c.execute(f"SELECT id, name, price, size, product_type FROM products WHERE id IN ({placeholders})", product_ids_in_basket)
+             product_db_details = {row['id']: dict(row) for row in c.fetchall()}
+
+        items_to_display_count = 0
+        expires_in_label = lang_data.get("expires_in_label", "Expires in"); remove_button_label = lang_data.get("remove_button_label", "Remove")
+
+        for index, item in enumerate(basket):
+            prod_id = item['product_id']; details = product_db_details.get(prod_id)
+            if not details: logger.warning(f"P{prod_id} missing DB details for view."); continue
+
+            if 'price' in item and isinstance(item['price'], Decimal): price = item['price']
+            else: price = Decimal(str(details['price']))
+
+            timestamp = item['timestamp']
+            product_type_name = details['product_type']
+            product_emoji = PRODUCT_TYPES.get(product_type_name, DEFAULT_PRODUCT_EMOJI)
+            item_desc = f"{product_emoji} {product_type_name} {details['size']}"
+            item_price = format_currency(price)
+            remaining_time = max(0, int(BASKET_TIMEOUT - (time.time() - timestamp)))
+            time_str = f"{remaining_time // 60} min {remaining_time % 60} sec"
+            msg += (f"{items_to_display_count + 1}. {item_desc} ({item_price}€)\n" f"   ⏳ {expires_in_label}: {time_str}\n")
+            remove_button_text = f"🗑️ {remove_button_label} {item_desc}"[:60] # Truncate for safety
+            keyboard_items.append([InlineKeyboardButton(remove_button_text, callback_data=f"remove|{prod_id}")])
+            original_total += price
+            items_to_display_count += 1
+
+        if items_to_display_count == 0:
+             context.user_data.pop('applied_discount', None); context.user_data['basket'] = []
+             basket_empty_msg = lang_data.get("basket_empty", "🛒 Your Basket is Empty!"); items_expired_note = lang_data.get("items_expired_note", "Items may have expired or were removed.")
+             shop_button_text = lang_data.get("shop_button", "Shop"); home_button_text = lang_data.get("home_button", "Home")
+             full_empty_msg = basket_empty_msg + "\n\n" + items_expired_note
+             keyboard = [[InlineKeyboardButton(f"🛍️ {shop_button_text}", callback_data="shop"), InlineKeyboardButton(f"🏠 {home_button_text}", callback_data="back_start")]]; await query.edit_message_text(full_empty_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None); return
+
+        discount_amount = Decimal('0.0'); final_total = original_total; discount_applied_str = ""
+        discount_applied_label = lang_data.get("discount_applied_label", "Discount Applied"); discount_removed_note_template = lang_data.get("discount_removed_note", "Discount code {code} removed: {reason}")
+
+        if discount_code_to_revalidate:
+            code_valid, validation_message, discount_details = validate_discount_code(discount_code_to_revalidate, float(original_total))
+            if code_valid and discount_details:
+                discount_amount = Decimal(str(discount_details['discount_amount']))
+                final_total = Decimal(str(discount_details['final_total']))
+                discount_code = discount_code_to_revalidate; discount_value = format_discount_value(discount_details['type'], discount_details['value'])
+                discount_amount_str = format_currency(discount_amount)
+                discount_applied_str = (f"\n{EMOJI_DISCOUNT} {discount_applied_label} ({discount_code}: {discount_value}): -{discount_amount_str} EUR")
+                context.user_data['applied_discount'] = {'code': discount_code_to_revalidate, 'amount': float(discount_amount), 'final_total': float(final_total)}
             else:
-                logger.warning(f"Welcome message template '{name}' not found for update.")
-                return False
-    except sqlite3.Error as e:
-        logger.error(f"DB error updating welcome message template '{name}': {e}", exc_info=True)
-        return False
+                context.user_data.pop('applied_discount', None); logger.info(f"Discount '{discount_code_to_revalidate}' invalid user {user_id}. Reason: {validation_message}")
+                discount_applied_str = f"\n{discount_removed_note_template.format(code=discount_code_to_revalidate, reason=validation_message)}"
 
-def delete_welcome_message_template(name: str) -> bool:
-    """Deletes a welcome message template."""
-    try:
-        with get_db_connection() as conn:
+        subtotal_label = lang_data.get("subtotal_label", "Subtotal"); total_label = lang_data.get("total_label", "Total")
+        original_total_str = format_currency(original_total); final_total_str = format_currency(final_total)
+        msg += f"\n{subtotal_label}: {original_total_str} EUR"
+        msg += discount_applied_str if discount_applied_str else ""
+        msg += f"\n💳 {total_label}: {final_total_str} EUR"
+
+        pay_now_button_text = lang_data.get("pay_now_button", "Pay Now"); clear_all_button_text = lang_data.get("clear_all_button", "Clear All")
+        remove_discount_button_text = lang_data.get("remove_discount_button", "Remove Discount"); apply_discount_button_text = lang_data.get("apply_discount_button", "Apply Discount Code")
+        shop_more_button_text = lang_data.get("shop_more_button", "Shop More"); home_button_text = lang_data.get("home_button", "Home")
+
+        action_buttons = [
+            [InlineKeyboardButton(f"💳 {pay_now_button_text}", callback_data="confirm_pay"), InlineKeyboardButton(f"{basket_emoji} {clear_all_button_text}", callback_data="clear_basket")],
+            *([[InlineKeyboardButton(f"❌ {remove_discount_button_text}", callback_data="remove_discount")]] if context.user_data.get('applied_discount') else []),
+            [InlineKeyboardButton(f"{EMOJI_DISCOUNT} {apply_discount_button_text}", callback_data="apply_discount_start")],
+            [InlineKeyboardButton(f"{EMOJI_SHOP} {shop_more_button_text}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button_text}", callback_data="back_start")]
+        ]
+        final_keyboard = keyboard_items + action_buttons
+
+        try: await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(final_keyboard), parse_mode=None)
+        except telegram_error.BadRequest as e:
+             if "message is not modified" not in str(e).lower(): logger.error(f"Error editing basket view message: {e}")
+             else: await query.answer()
+
+    except sqlite3.Error as e: logger.error(f"DB error viewing basket user {user_id}: {e}", exc_info=True); await query.edit_message_text("❌ Error: Failed to Load Basket.", parse_mode=None)
+    except Exception as e: logger.error(f"Unexpected error viewing basket user {user_id}: {e}", exc_info=True); await query.edit_message_text("❌ Error: Unexpected issue.", parse_mode=None)
+    finally:
+         if conn: conn.close()
+
+# --- Discount Application Handlers ---
+# (apply_discount_start unchanged)
+async def apply_discount_start(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    user_id = query.from_user.id
+    lang, lang_data = _get_lang_data(context)
+
+    clear_expired_basket(context, user_id)
+    basket = context.user_data.get("basket", [])
+    if not basket: no_items_message = lang_data.get("discount_no_items", "Your basket is empty."); await query.answer(no_items_message, show_alert=True); return await handle_view_basket(update, context)
+
+    context.user_data['state'] = 'awaiting_user_discount_code'
+    cancel_button_text = lang_data.get("cancel_button", "Cancel")
+    keyboard = [[InlineKeyboardButton(f"❌ {cancel_button_text}", callback_data="view_basket")]]
+    enter_code_prompt = lang_data.get("enter_discount_code_prompt", "Please enter your discount code:")
+    await query.edit_message_text(f"{EMOJI_DISCOUNT} {enter_code_prompt}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    await query.answer(lang_data.get("enter_code_answer", "Enter code in chat."))
+
+# (remove_discount unchanged)
+async def remove_discount(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    user_id = query.from_user.id
+    lang, lang_data = _get_lang_data(context)
+
+    if 'applied_discount' in context.user_data:
+        removed_code = context.user_data.pop('applied_discount')['code']
+        logger.info(f"User {user_id} removed discount code '{removed_code}'.")
+        discount_removed_answer = lang_data.get("discount_removed_answer", "Discount removed.")
+        await query.answer(discount_removed_answer)
+    else: no_discount_answer = lang_data.get("no_discount_answer", "No discount applied."); await query.answer(no_discount_answer, show_alert=False)
+    await handle_view_basket(update, context)
+
+# (handle_user_discount_code_message unchanged)
+async def handle_user_discount_code_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    state = context.user_data.get("state")
+    lang, lang_data = _get_lang_data(context)
+
+    if state != "awaiting_user_discount_code": return
+    if not update.message or not update.message.text: send_text_please = lang_data.get("send_text_please", "Please send the code as text."); await send_message_with_retry(context.bot, chat_id, send_text_please, parse_mode=None); return
+
+    entered_code = update.message.text.strip()
+    context.user_data.pop('state', None)
+    view_basket_button_text = lang_data.get("view_basket_button", "View Basket"); returning_to_basket_msg = lang_data.get("returning_to_basket", "Returning to basket.")
+
+    if not entered_code: no_code_entered_msg = lang_data.get("no_code_entered", "No code entered."); await send_message_with_retry(context.bot, chat_id, no_code_entered_msg, parse_mode=None); keyboard = [[InlineKeyboardButton(view_basket_button_text, callback_data="view_basket")]]; await send_message_with_retry(context.bot, chat_id, returning_to_basket_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None); return
+
+    clear_expired_basket(context, user_id)
+    basket = context.user_data.get("basket", [])
+    original_total_decimal = Decimal('0.0'); conn = None
+    if basket:
+         try:
+            product_ids_in_basket = list(set(item['product_id'] for item in basket))
+            conn = get_db_connection()
             c = conn.cursor()
-            # Check if it's the active one (handled better in admin logic now)
-            result = c.execute("DELETE FROM welcome_messages WHERE name = ?", (name,))
-            conn.commit()
-            if result.rowcount > 0:
-                logger.info(f"Deleted welcome message template: '{name}'")
-                return True
+            placeholders = ','.join('?' for _ in product_ids_in_basket)
+            c.execute(f"SELECT id, price FROM products WHERE id IN ({placeholders})", product_ids_in_basket)
+            prices_dict = {row['id']: Decimal(str(row['price'])) for row in c.fetchall()}
+            original_total_decimal = sum(prices_dict.get(item['product_id'], Decimal('0.0')) for item in basket if item['product_id'] in prices_dict)
+         except sqlite3.Error as e: logger.error(f"DB error recalculating total user {user_id}: {e}"); error_calc_total = lang_data.get("error_calculating_total", "Error calculating total."); await send_message_with_retry(context.bot, chat_id, f"❌ {error_calc_total}", parse_mode=None); kb = [[InlineKeyboardButton(view_basket_button_text, callback_data="view_basket")]]; await send_message_with_retry(context.bot, chat_id, returning_to_basket_msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=None); return
+         finally:
+              if conn: conn.close()
+    else:
+        basket_empty_no_discount = lang_data.get("basket_empty_no_discount", "Basket empty. Cannot apply code."); await send_message_with_retry(context.bot, chat_id, basket_empty_no_discount, parse_mode=None); kb = [[InlineKeyboardButton(view_basket_button_text, callback_data="view_basket")]]; await send_message_with_retry(context.bot, chat_id, returning_to_basket_msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=None); return
+
+    # Validation message is English
+    code_valid, validation_message, discount_details = validate_discount_code(entered_code, float(original_total_decimal))
+
+    if code_valid and discount_details:
+        context.user_data['applied_discount'] = {'code': entered_code, 'amount': discount_details['discount_amount'], 'final_total': discount_details['final_total']}
+        logger.info(f"User {user_id} applied discount code '{entered_code}'.")
+        success_label = lang_data.get("success_label", "Success!")
+        feedback_msg = f"✅ {success_label} {validation_message}"
+    else:
+        context.user_data.pop('applied_discount', None)
+        logger.warning(f"User {user_id} failed to apply code '{entered_code}': {validation_message}")
+        feedback_msg = f"❌ {validation_message}"
+
+    keyboard = [[InlineKeyboardButton(view_basket_button_text, callback_data="view_basket")]]
+    await send_message_with_retry(context.bot, chat_id, feedback_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+
+# --- Remove From Basket ---
+# (handle_remove_from_basket unchanged)
+async def handle_remove_from_basket(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    user_id = query.from_user.id
+    lang, lang_data = _get_lang_data(context)
+
+    if not params: logger.warning(f"handle_remove_from_basket no product_id user {user_id}."); await query.answer("Error: Product ID missing.", show_alert=True); return
+    try: product_id_to_remove = int(params[0])
+    except ValueError: logger.warning(f"Invalid product_id format user {user_id}: {params[0]}"); await query.answer("Error: Invalid product data.", show_alert=True); return
+
+    logger.info(f"Attempting remove product {product_id_to_remove} user {user_id}.")
+    item_removed_from_context = False; item_to_remove_str = None; conn = None
+    current_basket_context = context.user_data.get("basket", []); new_basket_context = []
+    found_item_index = -1
+
+    for index, item in enumerate(current_basket_context):
+        if item.get('product_id') == product_id_to_remove:
+            found_item_index = index
+            try: timestamp_float = float(item['timestamp']); item_to_remove_str = f"{item['product_id']}:{timestamp_float}"
+            except (ValueError, TypeError, KeyError) as e: logger.error(f"Invalid format in context item {item}: {e}"); item_to_remove_str = None
+            break
+
+    if found_item_index != -1:
+        item_removed_from_context = True
+        new_basket_context = current_basket_context[:found_item_index] + current_basket_context[found_item_index+1:]
+        logger.debug(f"Found item {product_id_to_remove} in context user {user_id}. DB String: {item_to_remove_str}")
+    else: logger.warning(f"Product {product_id_to_remove} not in user_data basket user {user_id}."); new_basket_context = list(current_basket_context)
+
+    try:
+        conn = get_db_connection()
+        c = conn.cursor(); c.execute("BEGIN")
+        if item_removed_from_context:
+             update_result = c.execute("UPDATE products SET reserved = MAX(0, reserved - 1) WHERE id = ?", (product_id_to_remove,))
+             if update_result.rowcount > 0: logger.debug(f"Decremented reservation P{product_id_to_remove}.")
+             else: logger.warning(f"Could not find P{product_id_to_remove} to decrement reservation.")
+        c.execute("SELECT basket FROM users WHERE user_id = ?", (user_id,))
+        db_basket_result = c.fetchone(); db_basket_str = db_basket_result['basket'] if db_basket_result else ''
+        if db_basket_str and item_to_remove_str:
+            items_list = db_basket_str.split(',')
+            if item_to_remove_str in items_list:
+                items_list.remove(item_to_remove_str); new_db_basket_str = ','.join(items_list)
+                c.execute("UPDATE users SET basket = ? WHERE user_id = ?", (new_db_basket_str, user_id)); logger.debug(f"Updated DB basket user {user_id} to: {new_db_basket_str}")
+            else: logger.warning(f"Item string '{item_to_remove_str}' not found in DB basket '{db_basket_str}' user {user_id}.")
+        elif item_removed_from_context and not item_to_remove_str: logger.warning(f"Could not construct item string for DB removal P{product_id_to_remove}.")
+        elif not item_removed_from_context: logger.debug(f"Item {product_id_to_remove} not in context, DB basket not modified.")
+        conn.commit()
+        logger.info(f"DB ops complete remove P{product_id_to_remove} user {user_id}.")
+
+        context.user_data['basket'] = new_basket_context
+        if not context.user_data['basket']: context.user_data.pop('applied_discount', None)
+        elif context.user_data.get('applied_discount'):
+             applied_discount_info = context.user_data['applied_discount']
+             basket_total_after_removal = float(sum(item.get('price', Decimal('0.0')) for item in context.user_data['basket']))
+             code_valid, _, _ = validate_discount_code(applied_discount_info['code'], basket_total_after_removal)
+             if not code_valid:
+                 reason_removed = lang_data.get("discount_removed_invalid_basket", "Discount removed (basket changed).")
+                 context.user_data.pop('applied_discount', None);
+                 await query.answer(reason_removed, show_alert=False) # Notify user why it was removed
+
+    except sqlite3.Error as e:
+        if conn and conn.in_transaction: conn.rollback()
+        logger.error(f"DB error removing item {product_id_to_remove} user {user_id}: {e}", exc_info=True); await query.edit_message_text("❌ Error: Failed to remove item (DB).", parse_mode=None); return
+    except Exception as e:
+        if conn and conn.in_transaction: conn.rollback()
+        logger.error(f"Unexpected error removing item {product_id_to_remove} user {user_id}: {e}", exc_info=True); await query.edit_message_text("❌ Error: Unexpected issue removing item.", parse_mode=None); return
+    finally:
+        if conn: conn.close()
+    await handle_view_basket(update, context)
+
+# (handle_clear_basket unchanged)
+async def handle_clear_basket(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    user_id = query.from_user.id
+    lang, lang_data = _get_lang_data(context)
+    conn = None
+
+    current_basket_context = context.user_data.get("basket", [])
+    if not current_basket_context: already_empty_msg = lang_data.get("basket_already_empty", "Basket already empty."); await query.answer(already_empty_msg, show_alert=False); return await handle_view_basket(update, context)
+
+    product_ids_to_release_counts = Counter(item['product_id'] for item in current_basket_context)
+
+    try:
+        conn = get_db_connection()
+        c = conn.cursor(); c.execute("BEGIN"); c.execute("UPDATE users SET basket = '' WHERE user_id = ?", (user_id,))
+        if product_ids_to_release_counts:
+             decrement_data = [(count, pid) for pid, count in product_ids_to_release_counts.items()]
+             c.executemany("UPDATE products SET reserved = MAX(0, reserved - ?) WHERE id = ?", decrement_data)
+             total_items_released = sum(product_ids_to_release_counts.values()); logger.info(f"Released {total_items_released} reservations user {user_id} clear.")
+        conn.commit()
+        context.user_data["basket"] = []; context.user_data.pop('applied_discount', None)
+        logger.info(f"Cleared basket/discount user {user_id}.")
+        shop_button_text = lang_data.get("shop_button", "Shop"); home_button_text = lang_data.get("home_button", "Home")
+        cleared_msg = lang_data.get("basket_cleared", "🗑️ Basket Cleared!")
+        keyboard = [[InlineKeyboardButton(f"{EMOJI_SHOP} {shop_button_text}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button_text}", callback_data="back_start")]]
+        await query.edit_message_text(cleared_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+    except sqlite3.Error as e:
+        if conn and conn.in_transaction: conn.rollback()
+        logger.error(f"DB error clearing basket user {user_id}: {e}", exc_info=True); await query.edit_message_text("❌ Error: DB issue clearing basket.", parse_mode=None)
+    except Exception as e:
+        if conn and conn.in_transaction: conn.rollback()
+        logger.error(f"Unexpected error clearing basket user {user_id}: {e}", exc_info=True); await query.edit_message_text("❌ Error: Unexpected issue.", parse_mode=None)
+    finally:
+        if conn: conn.close()
+
+
+# --- Confirm Pay Handler (Modified for Insufficient Balance) ---
+async def handle_confirm_pay(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Handles the 'Pay Now' button press from the basket."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+    lang, lang_data = _get_lang_data(context)
+
+    clear_expired_basket(context, user_id) # Sync call
+    basket = context.user_data.get("basket", [])
+    applied_discount_info = context.user_data.get('applied_discount')
+
+    if not basket:
+        await query.answer("Your basket is empty!", show_alert=True)
+        await handle_view_basket(update, context) # Use await
+        return
+
+    # --- Variables to store results ---
+    conn = None
+    original_total = Decimal('0.0')
+    final_total = Decimal('0.0')
+    valid_basket_items_snapshot = []
+    discount_code_to_use = None
+    user_balance = Decimal('0.0')
+    error_occurred = False # Flag
+
+    # --- Fetch data and calculate ---
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        product_ids_in_basket = list(set(item['product_id'] for item in basket))
+        if not product_ids_in_basket:
+             await query.answer("Basket empty after validation.", show_alert=True)
+             await handle_view_basket(update, context) # Use await
+             return
+
+        placeholders = ','.join('?' for _ in product_ids_in_basket)
+        # Fetch necessary details for snapshot
+        c.execute(f"SELECT id, price, name, size, product_type FROM products WHERE id IN ({placeholders})", product_ids_in_basket)
+        prices_dict = {row['id']: dict(row) for row in c.fetchall()} # Store full dict
+
+        for item in basket:
+             prod_id = item['product_id']
+             if prod_id in prices_dict:
+                 db_price = Decimal(str(prices_dict[prod_id]['price']))
+                 original_total += db_price
+                 # Create snapshot with necessary info for later processing
+                 item_snapshot = {
+                     "product_id": prod_id,
+                     "price": float(db_price), # Store as float for JSON later
+                     "name": prices_dict[prod_id]['name'],
+                     "size": prices_dict[prod_id]['size'],
+                     "product_type": prices_dict[prod_id]['product_type']
+                     # timestamp is not needed in snapshot for final processing
+                 }
+                 valid_basket_items_snapshot.append(item_snapshot)
+             else: logger.warning(f"Product {prod_id} missing during payment confirm user {user_id}.")
+
+        if not valid_basket_items_snapshot:
+             context.user_data['basket'] = []
+             context.user_data.pop('applied_discount', None)
+             logger.warning(f"All items unavailable user {user_id} payment confirm.")
+             keyboard_back = [[InlineKeyboardButton("⬅️ Back", callback_data="view_basket")]]
+             try: await query.edit_message_text("❌ Error: All items unavailable.", reply_markup=InlineKeyboardMarkup(keyboard_back), parse_mode=None)
+             except telegram_error.BadRequest: await send_message_with_retry(context.bot, chat_id, "❌ Error: All items unavailable.", reply_markup=InlineKeyboardMarkup(keyboard_back), parse_mode=None)
+             return
+
+        final_total = original_total
+        if applied_discount_info:
+            code_valid, _, discount_details = validate_discount_code(applied_discount_info['code'], float(original_total))
+            if code_valid and discount_details:
+                final_total = Decimal(str(discount_details['final_total']))
+                discount_code_to_use = applied_discount_info.get('code')
+                context.user_data['applied_discount']['final_total'] = float(final_total)
+                context.user_data['applied_discount']['amount'] = discount_details['discount_amount']
             else:
-                logger.warning(f"Welcome message template '{name}' not found for deletion.")
-                return False
-    except sqlite3.Error as e:
-        logger.error(f"DB error deleting welcome message template '{name}': {e}", exc_info=True)
-        return False
+                final_total = original_total
+                discount_code_to_use = None
+                context.user_data.pop('applied_discount', None)
+                await query.answer("Applied discount became invalid.", show_alert=True)
 
-def set_active_welcome_message(name: str) -> bool:
-    """Sets the active welcome message template name in bot_settings."""
+        if final_total < Decimal('0.0'):
+             await query.answer("Cannot process negative amount.", show_alert=True)
+             return
+
+        c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+        balance_result = c.fetchone()
+        user_balance = Decimal(str(balance_result['balance'])) if balance_result else Decimal('0.0')
+
+    except (sqlite3.Error, Exception) as e: # Catch potential errors here
+        logger.error(f"Error during payment confirm data processing user {user_id}: {e}", exc_info=True)
+        error_occurred = True # Set flag
+        kb = [[InlineKeyboardButton("⬅️ Back", callback_data="view_basket")]]
+        try: await query.edit_message_text("❌ Error preparing payment.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=None)
+        except Exception as edit_err: logger.error(f"Failed to edit message in error handler: {edit_err}")
+    finally:
+        if conn:
+            conn.close() # Ensure connection is closed
+            logger.debug("DB connection closed in handle_confirm_pay.")
+
+    # --- Proceed only if no error occurred during data processing ---
+    if error_occurred:
+        return # Stop execution if an error happened
+
+    # --- Balance Comparison and Action Logic ---
+    logger.info(f"Payment confirm user {user_id}. Final Total: {final_total:.2f}, Balance: {user_balance:.2f}. Basket: {valid_basket_items_snapshot}")
+
+    if user_balance >= final_total:
+        # Pay with balance (Existing Logic - Calls helper which handles finalization)
+        logger.info(f"Sufficient balance user {user_id}. Processing with balance.")
+        try:
+            if query.message: await query.edit_message_text("⏳ Processing payment with balance...", reply_markup=None, parse_mode=None)
+            else: await send_message_with_retry(context.bot, chat_id, "⏳ Processing payment with balance...", parse_mode=None)
+        except telegram_error.BadRequest: await query.answer("Processing...")
+
+        # Pass the *snapshot* created earlier
+        success = await payment.process_purchase_with_balance(user_id, final_total, valid_basket_items_snapshot, discount_code_to_use, context)
+
+        if success:
+            try:
+                 if query.message: await query.edit_message_text("✅ Purchase successful! Details sent.", reply_markup=None, parse_mode=None)
+            except telegram_error.BadRequest: pass # Ignore edit error after success
+        # else: Failure message handled within process_purchase_with_balance
+
+    else:
+        # --- INSUFFICIENT BALANCE - NEW FLOW ---
+        logger.info(f"Insufficient balance user {user_id}. Prompting for discount/crypto.")
+
+        # Store necessary info for the next steps
+        context.user_data['basket_pay_snapshot'] = valid_basket_items_snapshot
+        context.user_data['basket_pay_total_eur'] = float(final_total)
+        context.user_data['basket_pay_discount_code'] = discount_code_to_use # May be None
+
+        needed_amount_str = format_currency(final_total)
+        balance_str = format_currency(user_balance)
+
+        insufficient_msg_template = lang_data.get("insufficient_balance_pay_option", "⚠️ Insufficient Balance! ({balance} / {required} EUR)")
+        prompt_discount_msg = lang_data.get("prompt_discount_or_pay", "Do you have a discount code to apply before paying with crypto?")
+        pay_crypto_button_text = lang_data.get("pay_crypto_button", "💳 Pay with Crypto")
+        apply_discount_button_text = lang_data.get("apply_discount_pay_button", "🏷️ Apply Discount Code")
+        back_basket_button_text = lang_data.get("back_basket_button", "Back to Basket")
+
+        full_msg = (f"{insufficient_msg_template.format(balance=balance_str, required=needed_amount_str)}\n\n"
+                   f"{prompt_discount_msg}")
+
+        keyboard = [
+            # Callback triggers asking for discount code
+            [InlineKeyboardButton(apply_discount_button_text, callback_data="apply_discount_basket_pay")],
+            # Callback skips discount and goes straight to crypto choice
+            [InlineKeyboardButton(pay_crypto_button_text, callback_data="skip_discount_basket_pay")],
+            [InlineKeyboardButton(f"⬅️ {back_basket_button_text}", callback_data="view_basket")]
+        ]
+        try:
+            await query.edit_message_text(full_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        except telegram_error.BadRequest:
+            await send_message_with_retry(context.bot, chat_id, full_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        await query.answer() # Acknowledge button press
+
+# --- NEW: Handler to Ask for Discount Code in Basket Pay Flow ---
+async def handle_apply_discount_basket_pay(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    user_id = query.from_user.id
+    lang, lang_data = _get_lang_data(context)
+
+    # Check if context for this flow exists
+    if 'basket_pay_snapshot' not in context.user_data or 'basket_pay_total_eur' not in context.user_data:
+        logger.error(f"User {user_id} clicked apply_discount_basket_pay but context is missing.")
+        await query.answer("Error: Context lost. Please go back to basket.", show_alert=True)
+        return await handle_view_basket(update, context) # Go back to basket
+
+    context.user_data['state'] = 'awaiting_basket_discount_code' # New state
+    prompt_msg = lang_data.get("basket_pay_enter_discount", "Please enter discount code for this purchase:")
+    cancel_button_text = lang_data.get("cancel_button", "Cancel")
+    # Cancel goes back to the discount/pay choice prompt
+    keyboard = [[InlineKeyboardButton(f"❌ {cancel_button_text}", callback_data="confirm_pay")]] # Re-trigger confirm_pay to show options again
+
+    await query.edit_message_text(prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    await query.answer("Enter discount code in chat.")
+
+
+# --- NEW: Message Handler for Basket Pay Discount Code ---
+async def handle_basket_discount_code_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    state = context.user_data.get("state")
+    lang, lang_data = _get_lang_data(context)
+
+    if state != "awaiting_basket_discount_code": return
+    if not update.message or not update.message.text: return
+
+    entered_code = update.message.text.strip()
+    context.user_data.pop('state', None) # Clear state after getting code
+
+    # Retrieve original total needed for validation
+    basket_snapshot = context.user_data.get('basket_pay_snapshot')
+    if not basket_snapshot:
+        logger.error(f"User {user_id} sent basket discount code but snapshot context is missing.")
+        await send_message_with_retry(context.bot, chat_id, "Error: Context lost. Returning to basket.", parse_mode=None)
+        # Clean up potentially stale context
+        context.user_data.pop('basket_pay_snapshot', None)
+        context.user_data.pop('basket_pay_total_eur', None)
+        context.user_data.pop('basket_pay_discount_code', None)
+        return await handle_view_basket(update, context) # Send back to basket
+
+    # Calculate original total from snapshot
+    original_total_float = sum(item.get('price', 0.0) for item in basket_snapshot)
+
+    if not entered_code:
+        await send_message_with_retry(context.bot, chat_id, lang_data.get("no_code_entered", "No code entered."), parse_mode=None)
+        # Re-show crypto choices without discount
+        await _show_crypto_choices_for_basket(update, context)
+        return
+
+    code_valid, validation_message, discount_details = validate_discount_code(entered_code, original_total_float)
+
+    feedback_msg_template = ""
+    if code_valid and discount_details:
+        new_final_total = discount_details['final_total']
+        context.user_data['basket_pay_total_eur'] = new_final_total # Update the total to pay
+        context.user_data['basket_pay_discount_code'] = entered_code # Store the code used
+        logger.info(f"User {user_id} applied valid basket discount '{entered_code}'. New total: {new_final_total:.2f} EUR")
+        feedback_msg_template = lang_data.get("basket_pay_code_applied", "✅ Code '{code}' applied. New total: {total} EUR. Choose crypto:")
+        feedback_msg = feedback_msg_template.format(code=entered_code, total=format_currency(new_final_total))
+    else:
+        # Keep original total, don't store discount code
+        context.user_data['basket_pay_discount_code'] = None
+        logger.warning(f"User {user_id} entered invalid basket discount '{entered_code}': {validation_message}")
+        original_total_eur = context.user_data.get('basket_pay_total_eur', 0.0) # Get potentially pre-discount total back
+        feedback_msg_template = lang_data.get("basket_pay_code_invalid", "❌ Code invalid: {reason}. Choose crypto to pay {total} EUR:")
+        feedback_msg = feedback_msg_template.format(reason=validation_message, total=format_currency(original_total_eur))
+
+    # Delete the user's message containing the code
     try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            # First check if the template name actually exists
-            c.execute("SELECT 1 FROM welcome_messages WHERE name = ?", (name,))
-            if not c.fetchone():
-                logger.error(f"Attempted to activate non-existent welcome template: '{name}'")
-                return False
-            # Update or insert the setting
-            c.execute("INSERT OR REPLACE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
-                      ("active_welcome_message_name", name))
-            conn.commit()
-            logger.info(f"Set active welcome message template to: '{name}'")
-            return True
+        await context.bot.delete_message(chat_id=chat_id, message_id=update.message.message_id)
+    except Exception as e:
+        logger.warning(f"Could not delete user's discount code message: {e}")
+
+    # Send feedback and show crypto choices
+    await send_message_with_retry(context.bot, chat_id, feedback_msg, parse_mode=None)
+    await _show_crypto_choices_for_basket(update, context)
+
+# --- NEW: Handler to Skip Discount in Basket Pay Flow ---
+async def handle_skip_discount_basket_pay(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    # Check if context for this flow exists
+    if 'basket_pay_snapshot' not in context.user_data or 'basket_pay_total_eur' not in context.user_data:
+        logger.error(f"User {user_id} clicked skip_discount_basket_pay but context is missing.")
+        await query.answer("Error: Context lost. Please go back to basket.", show_alert=True)
+        return await handle_view_basket(update, context) # Go back to basket
+
+    context.user_data['basket_pay_discount_code'] = None # Ensure no discount code is stored
+    await query.answer("Skipping discount...")
+    # Edit the previous message to show crypto choices
+    await _show_crypto_choices_for_basket(update, context, edit_message=True)
+
+
+# --- NEW: Helper to Show Crypto Choices for Basket Payment ---
+async def _show_crypto_choices_for_basket(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
+    """Displays cryptocurrency selection buttons for the basket total."""
+    query = update.callback_query # May be None if called from message handler
+    chat_id = update.effective_chat.id
+    lang, lang_data = _get_lang_data(context)
+
+    # Get stored total
+    total_eur_float = context.user_data.get('basket_pay_total_eur')
+    if total_eur_float is None:
+        logger.error("Cannot show crypto choices for basket: total EUR missing from context.")
+        msg = "Error: Payment amount missing. Returning to basket."
+        kb = [[InlineKeyboardButton("⬅️ Back", callback_data="view_basket")]]
+        if query and edit_message: await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+        else: await send_message_with_retry(context.bot, chat_id, msg, reply_markup=InlineKeyboardMarkup(kb))
+        if query: await query.answer("Error: Amount missing.", show_alert=True)
+        return
+
+    # Use same currencies as refill
+    supported_currencies = {
+        'BTC': 'btc', 'LTC': 'ltc', 'ETH': 'eth', 'SOL': 'sol',
+        'USDT': 'usdt', 'USDC': 'usdc', 'TON': 'ton'
+    }
+    asset_buttons = []
+    row = []
+    for display, code in supported_currencies.items():
+        # NEW Callback Data for basket payment crypto selection
+        row.append(InlineKeyboardButton(display, callback_data=f"select_basket_crypto|{code}"))
+        if len(row) >= 3:
+            asset_buttons.append(row)
+            row = []
+    if row:
+        asset_buttons.append(row)
+
+    cancel_button_text = lang_data.get("cancel_button", "Cancel")
+    asset_buttons.append([InlineKeyboardButton(f"❌ {cancel_button_text}", callback_data="view_basket")]) # Cancel returns to basket
+
+    amount_str = format_currency(total_eur_float)
+    prompt_template = lang_data.get("choose_crypto_for_purchase", "Choose crypto to pay {amount} EUR for your basket:")
+    prompt_msg = prompt_template.format(amount=amount_str)
+
+    if query and edit_message:
+        try:
+            await query.edit_message_text(prompt_msg, reply_markup=InlineKeyboardMarkup(asset_buttons), parse_mode=None)
+        except telegram_error.BadRequest as e:
+            if "message is not modified" not in str(e).lower():
+                 logger.error(f"Error editing message for crypto choice (basket): {e}")
+                 # Send as new message if edit fails
+                 await send_message_with_retry(context.bot, chat_id, prompt_msg, reply_markup=InlineKeyboardMarkup(asset_buttons), parse_mode=None)
+            elif query: await query.answer() # Acknowledge if not modified
+    else:
+        # Send as a new message if not editing (e.g., after discount code message)
+        await send_message_with_retry(context.bot, chat_id, prompt_msg, reply_markup=InlineKeyboardMarkup(asset_buttons), parse_mode=None)
+
+
+# --- Other User Handlers ---
+# (handle_view_history unchanged)
+async def handle_view_history(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    user_id = query.from_user.id
+    lang, lang_data = _get_lang_data(context)
+    history = fetch_last_purchases(user_id, limit=10)
+
+    history_title = lang_data.get("purchase_history_title", "Purchase History"); no_history_msg = lang_data.get("no_purchases_yet", "No purchases yet.")
+    recent_purchases_title = lang_data.get("recent_purchases_title", "Recent Purchases"); back_profile_button = lang_data.get("back_profile_button", "Back to Profile")
+    home_button = lang_data.get("home_button", "Home"); unknown_date_label = lang_data.get("unknown_date_label", "Unknown Date")
+
+    if not history: msg = f"📜 {history_title}\n\n{no_history_msg}"; keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_profile_button}", callback_data="profile"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
+    else:
+        msg = f"📜 {recent_purchases_title}\n\n"
+        for i, purchase in enumerate(history):
+            try:
+                dt_obj = datetime.fromisoformat(purchase['purchase_date'].replace('Z', '+00:00'))
+                date_str = dt_obj.strftime('%Y-%m-%d %H:%M')
+            except (ValueError, TypeError): date_str = unknown_date_label
+            name = purchase.get('product_name', 'N/A'); size = purchase.get('product_size', 'N/A')
+            price_str = format_currency(Decimal(str(purchase.get('price_paid', 0.0))))
+            msg += (f"{i+1}. {date_str} - {name} ({size}) - {price_str} EUR\n")
+        keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_profile_button}", callback_data="profile"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
+
+    try: await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    except telegram_error.BadRequest as e:
+        if "message is not modified" not in str(e).lower(): logger.error(f"Error editing history msg: {e}")
+        else: await query.answer()
+
+
+# --- Language Selection ---
+# (handle_language_selection is the modified version)
+async def handle_language_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Allows the user to select language and immediately refreshes the start menu."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    current_lang, current_lang_data = _get_lang_data(context)
+    username = update.effective_user.username or update.effective_user.first_name or f"User_{user_id}"
+    conn = None
+
+    if params:
+        new_lang = params[0]
+        if new_lang in LANGUAGES:
+            try:
+                conn = get_db_connection()
+                c = conn.cursor()
+                c.execute("UPDATE users SET language = ? WHERE user_id = ?", (new_lang, user_id))
+                conn.commit()
+                logger.info(f"User {user_id} DB language updated to {new_lang}")
+
+                context.user_data["lang"] = new_lang
+                logger.info(f"User {user_id} context language updated to {new_lang}")
+
+                new_lang_data = LANGUAGES.get(new_lang, LANGUAGES['en'])
+                language_set_answer = new_lang_data.get("language_set_answer", "Language set!")
+                await query.answer(language_set_answer.format(lang=new_lang.upper()))
+
+                logger.info(f"Rebuilding start menu in {new_lang} for user {user_id}")
+                start_menu_text, start_menu_markup = _build_start_menu_content(user_id, username, new_lang_data, context)
+                await query.edit_message_text(start_menu_text, reply_markup=start_menu_markup, parse_mode=None)
+                logger.info(f"Successfully edited message to show start menu in {new_lang}")
+
+            except sqlite3.Error as e:
+                logger.error(f"DB error updating language user {user_id}: {e}");
+                if conn and conn.in_transaction: conn.rollback()
+                error_saving_lang = current_lang_data.get("error_saving_language", "Error saving.")
+                await query.answer(error_saving_lang, show_alert=True)
+                await _display_language_menu(update, context, current_lang, current_lang_data)
+            except Exception as e:
+                logger.error(f"Unexpected error in language selection update for user {user_id}: {e}", exc_info=True)
+                await query.answer("An error occurred.", show_alert=True)
+                await _display_language_menu(update, context, current_lang, current_lang_data)
+            finally:
+                if conn: conn.close()
+        else:
+             invalid_lang_answer = current_lang_data.get("invalid_language_answer", "Invalid language.")
+             await query.answer(invalid_lang_answer, show_alert=True)
+    else:
+        await _display_language_menu(update, context, current_lang, current_lang_data)
+
+# (_display_language_menu helper unchanged)
+async def _display_language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, current_lang: str, current_lang_data: dict):
+     """Helper function to display the language selection keyboard."""
+     query = update.callback_query
+     keyboard = []
+     for lang_code, lang_dict_for_name in LANGUAGES.items():
+         lang_name = lang_dict_for_name.get("native_name", lang_code.upper())
+         keyboard.append([InlineKeyboardButton(f"{lang_name} {'✅' if lang_code == current_lang else ''}", callback_data=f"language|{lang_code}")])
+     back_button_text = current_lang_data.get("back_button", "Back")
+     keyboard.append([InlineKeyboardButton(f"{EMOJI_BACK} {back_button_text}", callback_data="back_start")])
+     lang_select_prompt = current_lang_data.get("language", "🌐 Select Language:")
+     try:
+        if query and query.message:
+            await query.edit_message_text(lang_select_prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        else:
+             await send_message_with_retry(context.bot, update.effective_chat.id, lang_select_prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+     except Exception as e:
+         logger.error(f"Error displaying language menu: {e}")
+         try:
+             await send_message_with_retry(context.bot, update.effective_chat.id, lang_select_prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+         except Exception as send_e:
+             logger.error(f"Failed to send language menu after edit error: {send_e}")
+
+
+# --- Price List ---
+# (handle_price_list unchanged)
+async def handle_price_list(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    lang, lang_data = _get_lang_data(context)
+
+    if not CITIES: no_cities_msg = lang_data.get("no_cities_for_prices", "No cities available."); keyboard = [[InlineKeyboardButton(f"{EMOJI_HOME} {lang_data.get('home_button', 'Home')}", callback_data="back_start")]]; await query.edit_message_text(f"{EMOJI_CITY} {no_cities_msg}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None); return
+
+    sorted_city_ids = sorted(CITIES.keys(), key=lambda city_id: CITIES.get(city_id, ''))
+    home_button_text = lang_data.get("home_button", "Home")
+    keyboard = [[InlineKeyboardButton(f"{EMOJI_CITY} {CITIES.get(c, 'N/A')}", callback_data=f"price_list_city|{c}")] for c in sorted_city_ids if CITIES.get(c)]
+    keyboard.append([InlineKeyboardButton(f"{EMOJI_HOME} {home_button_text}", callback_data="back_start")])
+    price_list_title = lang_data.get("price_list_title", "Price List"); select_city_prompt = lang_data.get("select_city_prices_prompt", "Select a city:")
+    await query.edit_message_text(f"{EMOJI_PRICELIST} {price_list_title}\n\n{select_city_prompt}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+# (handle_price_list_city unchanged)
+async def handle_price_list_city(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    lang, lang_data = _get_lang_data(context)
+    if not params: logger.warning("handle_price_list_city no city_id."); await query.answer("Error: City ID missing.", show_alert=True); return
+
+    city_id = params[0]; city_name = CITIES.get(city_id)
+    if not city_name: error_city_not_found = lang_data.get("error_city_not_found", "Error: City not found."); await query.edit_message_text(f"❌ {error_city_not_found}", parse_mode=None); return await handle_price_list(update, context)
+
+    price_list_title_city_template = lang_data.get("price_list_title_city", "Price List: {city_name}"); msg = f"{EMOJI_PRICELIST} {price_list_title_city_template.format(city_name=city_name)}\n\n"
+    found_products = False; conn = None
+
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT product_type, size, price, district, COUNT(*) as quantity FROM products WHERE city = ? AND available > reserved GROUP BY product_type, size, price, district ORDER BY product_type, price, size, district", (city_name,))
+        results = c.fetchall()
+        no_products_in_city = lang_data.get("no_products_in_city", "No products available here."); available_label = lang_data.get("available_label", "available")
+
+        if not results: msg += no_products_in_city
+        else:
+            found_products = True
+            grouped_data = defaultdict(lambda: defaultdict(list))
+            for row in results: price_size_key = (Decimal(str(row['price'])), row['size']); grouped_data[row['product_type']][price_size_key].append((row['district'], row['quantity']))
+
+            for p_type in sorted(grouped_data.keys()):
+                type_data = grouped_data[p_type]; sorted_price_size = sorted(type_data.keys(), key=lambda x: (x[0], x[1]))
+                prod_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
+                for price, size in sorted_price_size:
+                    districts_list = type_data[(price, size)]; price_str = format_currency(price)
+                    msg += f"\n{prod_emoji} {p_type} {size} ({price_str}€)\n"
+                    districts_list.sort(key=lambda x: x[0])
+                    for district, quantity in districts_list: msg += f"  • {EMOJI_DISTRICT} {district}: {quantity} {available_label}\n"
+
+        back_city_list_button = lang_data.get("back_city_list_button", "Back to City List"); home_button = lang_data.get("home_button", "Home")
+        keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_city_list_button}", callback_data="price_list"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
+
+        try:
+            if len(msg) > 4000: truncated_note = lang_data.get("message_truncated_note", "Message truncated."); msg = msg[:4000] + f"\n\n✂️ ... {truncated_note}"; logger.warning(f"Price list message truncated {city_name}.")
+            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        except telegram_error.BadRequest as e:
+             if "message is not modified" not in str(e).lower():
+                 logger.error(f"Error editing price list: {e}. Snippet: {msg[:200]}")
+                 error_displaying_prices = lang_data.get("error_displaying_prices", "Error displaying prices.")
+                 await query.answer(error_displaying_prices, show_alert=True)
+             else:
+                 await query.answer()
+
     except sqlite3.Error as e:
-        logger.error(f"DB error setting active welcome message to '{name}': {e}", exc_info=True)
-        return False
+        logger.error(f"DB error fetching price list city {city_name}: {e}", exc_info=True)
+        error_loading_prices_db_template = lang_data.get("error_loading_prices_db", "Error: DB Load Error {city_name}")
+        await query.edit_message_text(f"❌ {error_loading_prices_db_template.format(city_name=city_name)}", parse_mode=None)
+    except Exception as e:
+        logger.error(f"Unexpected error price list city {city_name}: {e}", exc_info=True)
+        error_unexpected_prices = lang_data.get("error_unexpected_prices", "Error: Unexpected issue.")
+        await query.edit_message_text(f"❌ {error_unexpected_prices}", parse_mode=None)
+    finally:
+         if conn: conn.close()
 
 
-# --- Initial Data Load ---
-init_db()
-load_all_data()
+# --- Review Handlers ---
+# (handle_reviews_menu, handle_leave_review, handle_leave_review_message, handle_view_reviews, handle_leave_review_now unchanged)
+async def handle_reviews_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    lang, lang_data = _get_lang_data(context)
+    review_prompt = lang_data.get("reviews", "📝 Reviews Menu")
+    view_reviews_button = lang_data.get("view_reviews_button", "View Reviews")
+    leave_review_button = lang_data.get("leave_review_button", "Leave a Review")
+    home_button = lang_data.get("home_button", "Home")
+    keyboard = [
+        [InlineKeyboardButton(f"👀 {view_reviews_button}", callback_data="view_reviews|0")],
+        [InlineKeyboardButton(f"✍️ {leave_review_button}", callback_data="leave_review")],
+        [InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(review_prompt, reply_markup=reply_markup, parse_mode=None)
 
-# --- END OF FILE utils.py ---
+
+async def handle_leave_review(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    lang, lang_data = _get_lang_data(context)
+    context.user_data["state"] = "awaiting_review"
+    enter_review_prompt = lang_data.get("enter_review_prompt", "Please type your review message and send it."); cancel_button_text = lang_data.get("cancel_button", "Cancel"); prompt_msg = f"✍️ {enter_review_prompt}"
+    keyboard = [[InlineKeyboardButton(f"❌ {cancel_button_text}", callback_data="reviews")]]
+    try:
+        await query.edit_message_text(prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        enter_review_answer = lang_data.get("enter_review_answer", "Enter your review in the chat.")
+        await query.answer(enter_review_answer)
+    except telegram_error.BadRequest as e:
+        if "message is not modified" not in str(e).lower(): logger.error(f"Error editing leave review prompt: {e}"); await send_message_with_retry(context.bot, update.effective_chat.id, prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None); await query.answer()
+        else: await query.answer()
+    except Exception as e: logger.error(f"Unexpected error handle_leave_review: {e}", exc_info=True); await query.answer("Error occurred.", show_alert=True)
+
+
+async def handle_leave_review_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    state = context.user_data.get("state")
+    lang, lang_data = _get_lang_data(context)
+
+    if state != "awaiting_review": return
+
+    send_text_review_please = lang_data.get("send_text_review_please", "Please send text only for your review.")
+    review_not_empty = lang_data.get("review_not_empty", "Review cannot be empty. Please try again or cancel.")
+    review_too_long = lang_data.get("review_too_long", "Review is too long (max 1000 characters). Please shorten it.")
+    review_thanks = lang_data.get("review_thanks", "Thank you for your review! Your feedback helps us improve.")
+    error_saving_review_db = lang_data.get("error_saving_review_db", "Error: Could not save your review due to a database issue.")
+    error_saving_review_unexpected = lang_data.get("error_saving_review_unexpected", "Error: An unexpected issue occurred while saving your review.")
+    view_reviews_button = lang_data.get("view_reviews_button", "View Reviews")
+    home_button = lang_data.get("home_button", "Home")
+
+    if not update.message or not update.message.text:
+        await send_message_with_retry(context.bot, chat_id, send_text_review_please, parse_mode=None)
+        return
+
+    review_text = update.message.text.strip()
+    if not review_text:
+        await send_message_with_retry(context.bot, chat_id, review_not_empty, parse_mode=None)
+        return
+
+    if len(review_text) > 1000:
+         await send_message_with_retry(context.bot, chat_id, review_too_long, parse_mode=None)
+         return
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO reviews (user_id, review_text, review_date) VALUES (?, ?, ?)",
+            (user_id, review_text, datetime.now(timezone.utc).isoformat())
+        )
+        conn.commit()
+        logger.info(f"User {user_id} left a review.")
+        context.user_data.pop("state", None)
+
+        success_msg = f"✅ {review_thanks}"
+        keyboard = [[InlineKeyboardButton(f"👀 {view_reviews_button}", callback_data="view_reviews|0"),
+                     InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
+        await send_message_with_retry(context.bot, chat_id, success_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+    except sqlite3.Error as e:
+        logger.error(f"DB error saving review user {user_id}: {e}", exc_info=True)
+        if conn and conn.in_transaction: conn.rollback()
+        context.user_data.pop("state", None)
+        await send_message_with_retry(context.bot, chat_id, f"❌ {error_saving_review_db}", parse_mode=None)
+
+    except Exception as e:
+        logger.error(f"Unexpected error saving review user {user_id}: {e}", exc_info=True)
+        if conn and conn.in_transaction: conn.rollback()
+        context.user_data.pop("state", None)
+        await send_message_with_retry(context.bot, chat_id, f"❌ {error_saving_review_unexpected}", parse_mode=None)
+
+    finally:
+        if conn: conn.close()
+
+async def handle_view_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    lang, lang_data = _get_lang_data(context)
+    offset = 0; reviews_per_page = 5
+    if params and len(params) > 0 and params[0].isdigit(): offset = int(params[0])
+    reviews_data = fetch_reviews(offset=offset, limit=reviews_per_page + 1)
+    user_reviews_title = lang_data.get("user_reviews_title", "User Reviews"); no_reviews_yet = lang_data.get("no_reviews_yet", "No reviews yet."); no_more_reviews = lang_data.get("no_more_reviews", "No more reviews."); prev_button = lang_data.get("prev_button", "Prev"); next_button = lang_data.get("next_button", "Next"); back_review_menu_button = lang_data.get("back_review_menu_button", "Back to Reviews"); unknown_date_label = lang_data.get("unknown_date_label", "Unknown Date"); error_displaying_review = lang_data.get("error_displaying_review", "Error display"); error_updating_review_list = lang_data.get("error_updating_review_list", "Error updating list.")
+    msg = f"{EMOJI_REVIEW} {user_reviews_title}\n\n"; keyboard = []
+    if not reviews_data:
+        if offset == 0: msg += no_reviews_yet; keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_review_menu_button}", callback_data="reviews")]]
+        else: msg += no_more_reviews; keyboard = [[InlineKeyboardButton(f"⬅️ {prev_button}", callback_data=f"view_reviews|{max(0, offset - reviews_per_page)}")], [InlineKeyboardButton(f"{EMOJI_BACK} {back_review_menu_button}", callback_data="reviews")]]
+    else:
+        has_more = len(reviews_data) > reviews_per_page; reviews_to_show = reviews_data[:reviews_per_page]
+        for review in reviews_to_show:
+            try:
+                date_str = review.get('review_date', '')
+                formatted_date = unknown_date_label
+                if date_str:
+                    try: formatted_date = datetime.fromisoformat(date_str.replace('Z', '+00:00')).strftime("%Y-%m-%d")
+                    except ValueError: pass
+                username = review.get('username', 'anonymous'); username_display = f"@{username}" if username and username != 'anonymous' else username
+                review_text = review.get('review_text', ''); msg += f"{EMOJI_PROFILE} {username_display} ({formatted_date}):\n{review_text}\n\n"
+            except Exception as e: logger.error(f"Error formatting review: {review}, Error: {e}"); msg += f"({error_displaying_review})\n\n"
+        nav_buttons = []
+        if offset > 0: nav_buttons.append(InlineKeyboardButton(f"⬅️ {prev_button}", callback_data=f"view_reviews|{max(0, offset - reviews_per_page)}"))
+        if has_more: nav_buttons.append(InlineKeyboardButton(f"➡️ {next_button}", callback_data=f"view_reviews|{offset + reviews_per_page}"))
+        if nav_buttons: keyboard.append(nav_buttons)
+        keyboard.append([InlineKeyboardButton(f"{EMOJI_BACK} {back_review_menu_button}", callback_data="reviews")])
+    try: await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    except telegram_error.BadRequest as e:
+        if "message is not modified" not in str(e).lower(): logger.warning(f"Failed edit view_reviews: {e}"); await query.answer(error_updating_review_list, show_alert=True)
+        else: await query.answer()
+
+async def handle_leave_review_now(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Callback handler specifically for the 'Leave Review Now' button after purchase."""
+    await handle_leave_review(update, context, params)
+
+# --- Refill Handlers ---
+# (handle_refill unchanged)
+async def handle_refill(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+    lang, lang_data = _get_lang_data(context)
+
+    if not NOWPAYMENTS_API_KEY:
+        crypto_disabled_msg = lang_data.get("crypto_payment_disabled", "Top Up is currently disabled.")
+        await query.answer(crypto_disabled_msg, show_alert=True)
+        logger.warning(f"User {user_id} tried to refill, but NOWPAYMENTS_API_KEY is not set.")
+        return
+
+    context.user_data['state'] = 'awaiting_refill_amount'
+    logger.info(f"User {user_id} initiated refill process. State -> awaiting_refill_amount.")
+
+    top_up_title = lang_data.get("top_up_title", "Top Up Balance")
+    enter_refill_amount_prompt = lang_data.get("enter_refill_amount_prompt", "Please reply with the amount in EUR you wish to add (e.g., 10 or 25.50).")
+    min_top_up_note_template = lang_data.get("min_top_up_note", "Minimum top up: {amount} EUR")
+    cancel_button_text = lang_data.get("cancel_button", "Cancel")
+    enter_amount_answer = lang_data.get("enter_amount_answer", "Enter the top-up amount.")
+
+    min_amount_str = format_currency(MIN_DEPOSIT_EUR)
+    min_top_up_note = min_top_up_note_template.format(amount=min_amount_str)
+    prompt_msg = (f"{EMOJI_REFILL} {top_up_title}\n\n{enter_refill_amount_prompt}\n\n{min_top_up_note}")
+    keyboard = [[InlineKeyboardButton(f"❌ {cancel_button_text}", callback_data="profile")]]
+
+    try:
+        await query.edit_message_text(prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        await query.answer(enter_amount_answer)
+    except telegram_error.BadRequest as e:
+        if "message is not modified" not in str(e).lower(): logger.error(f"Error editing refill prompt: {e}"); await send_message_with_retry(context.bot, chat_id, prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None); await query.answer()
+        else: await query.answer(enter_amount_answer)
+    except Exception as e: logger.error(f"Unexpected error handle_refill: {e}", exc_info=True); error_occurred_answer = lang_data.get("error_occurred_answer", "An error occurred."); await query.answer(error_occurred_answer, show_alert=True)
+
+# (handle_refill_amount_message unchanged)
+async def handle_refill_amount_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    state = context.user_data.get("state")
+    lang, lang_data = _get_lang_data(context)
+
+    if state != "awaiting_refill_amount": logger.debug(f"Ignore msg user {user_id}, state: {state}"); return
+
+    send_amount_as_text = lang_data.get("send_amount_as_text", "Send amount as text (e.g., 10).")
+    amount_too_low_msg_template = lang_data.get("amount_too_low_msg", "Amount too low. Min: {amount} EUR.")
+    amount_too_high_msg = lang_data.get("amount_too_high_msg", "Amount too high. Max: 10000 EUR.")
+    invalid_amount_format_msg = lang_data.get("invalid_amount_format_msg", "Invalid amount format (e.g., 10.50).")
+    unexpected_error_msg = lang_data.get("unexpected_error_msg", "Unexpected error. Try again.")
+    choose_crypto_prompt_template = lang_data.get("choose_crypto_prompt", "Top up {amount} EUR. Choose crypto:")
+    cancel_top_up_button = lang_data.get("cancel_top_up_button", "Cancel Top Up")
+
+    if not update.message or not update.message.text:
+        await send_message_with_retry(context.bot, chat_id, f"❌ {send_amount_as_text}", parse_mode=None)
+        return
+
+    amount_text = update.message.text.strip().replace(',', '.')
+
+    try:
+        refill_amount_decimal = Decimal(amount_text)
+        if refill_amount_decimal < MIN_DEPOSIT_EUR:
+            min_amount_str = format_currency(MIN_DEPOSIT_EUR)
+            amount_too_low_msg = amount_too_low_msg_template.format(amount=min_amount_str)
+            await send_message_with_retry(context.bot, chat_id, f"❌ {amount_too_low_msg}", parse_mode=None)
+            return
+        if refill_amount_decimal > Decimal('10000.00'):
+            await send_message_with_retry(context.bot, chat_id, f"❌ {amount_too_high_msg}", parse_mode=None)
+            return
+
+        context.user_data['refill_eur_amount'] = float(refill_amount_decimal)
+        context.user_data['state'] = 'awaiting_refill_crypto_choice' # State remains specific to refill
+        logger.info(f"User {user_id} entered refill EUR: {refill_amount_decimal:.2f}. State -> awaiting_refill_crypto_choice")
+
+        supported_currencies = {
+            'BTC': 'btc', 'LTC': 'ltc', 'ETH': 'eth', 'SOL': 'sol',
+            'USDT': 'usdt', 'USDC': 'usdc', 'TON': 'ton'
+        }
+        asset_buttons = []
+        row = []
+        for display, code in supported_currencies.items():
+            # Use specific refill callback
+            row.append(InlineKeyboardButton(display, callback_data=f"select_refill_crypto|{code}"))
+            if len(row) >= 3:
+                asset_buttons.append(row)
+                row = []
+        if row:
+            asset_buttons.append(row)
+        asset_buttons.append([InlineKeyboardButton(f"❌ {cancel_top_up_button}", callback_data="profile")])
+
+        refill_amount_str = format_currency(refill_amount_decimal)
+        choose_crypto_msg = choose_crypto_prompt_template.format(amount=refill_amount_str)
+
+        await send_message_with_retry(context.bot, chat_id, choose_crypto_msg, reply_markup=InlineKeyboardMarkup(asset_buttons), parse_mode=None)
+
+    except ValueError:
+        await send_message_with_retry(context.bot, chat_id, f"❌ {invalid_amount_format_msg}", parse_mode=None)
+        return
+    except Exception as e:
+        logger.error(f"Error processing refill amount user {user_id}: {e}", exc_info=True)
+        await send_message_with_retry(context.bot, chat_id, f"❌ {unexpected_error_msg}", parse_mode=None)
+        context.user_data.pop('state', None)
+        context.user_data.pop('refill_eur_amount', None)
