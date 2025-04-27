@@ -27,7 +27,8 @@ from utils import (
     SECONDARY_ADMIN_IDS, fetch_reviews,
     get_db_connection, MEDIA_DIR, # Import helper and MEDIA_DIR
     get_user_status, get_progress_bar, # Import user status helpers
-    log_admin_action # <-- IMPORT admin log function
+    log_admin_action, # <-- IMPORT admin log function
+    PRODUCT_TYPES, DEFAULT_PRODUCT_EMOJI # <<< IMPORT THESE FOR HISTORY
 )
 # Import the shared stock handler from stock.py
 try:
@@ -499,11 +500,24 @@ async def handle_view_user_profile(update: Update, context: ContextTypes.DEFAULT
 
         username = user_data['username'] or f"ID_{target_user_id}"
         balance = Decimal(str(user_data['balance']))
-        purchases = user_data['total_purchases']
+        purchases_count = user_data['total_purchases'] # Keep the count variable name
         is_banned = user_data['is_banned'] == 1
 
-        status = get_user_status(purchases)
-        progress_bar = get_progress_bar(purchases)
+        # <<< NEW: Fetch recent purchase history >>>
+        history_limit = 5 # Show last 5 purchases in this view
+        c.execute("""
+            SELECT purchase_date, product_name, product_type, product_size, price_paid
+            FROM purchases
+            WHERE user_id = ?
+            ORDER BY purchase_date DESC
+            LIMIT ?
+        """, (target_user_id, history_limit))
+        recent_purchases = c.fetchall()
+        # <<< END NEW >>>
+
+
+        status = get_user_status(purchases_count)
+        progress_bar = get_progress_bar(purchases_count)
         balance_str = format_currency(balance)
         banned_str = lang_data.get("user_profile_is_banned", "Yes 🚫") if is_banned else lang_data.get("user_profile_not_banned", "No ✅")
 
@@ -516,8 +530,30 @@ async def handle_view_user_profile(update: Update, context: ContextTypes.DEFAULT
         msg = (f"{title_template.format(username=username, user_id=target_user_id)}\n\n"
                f"👤 {status_label}: {status} {progress_bar}\n"
                f"💰 {balance_label}: {balance_str} EUR\n"
-               f"📦 {purchases_label}: {purchases}\n"
+               f"📦 {purchases_label}: {purchases_count}\n" # Show total count still
                f"🚫 {banned_label}: {banned_str}")
+
+        # <<< NEW: Format and append purchase history >>>
+        history_str = f"\n\n📜 Recent Purchases (Last {history_limit}):\n"
+        if not recent_purchases:
+            history_str += "  - No purchases found.\n"
+        else:
+            for purchase in recent_purchases:
+                try:
+                    dt_obj = datetime.fromisoformat(purchase['purchase_date'].replace('Z', '+00:00'))
+                    date_str = dt_obj.strftime('%y-%m-%d %H:%M') # Shorter date format
+                except (ValueError, TypeError):
+                    date_str = "???"
+                p_type = purchase['product_type']
+                p_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
+                p_name = purchase['product_name'] or 'N/A' # Use name from purchase record if available
+                p_size = purchase['product_size'] or 'N/A'
+                p_price = format_currency(purchase['price_paid'])
+                history_str += f"  - {date_str}: {p_emoji} {p_size} ({p_price}€)\n" # Simplified item display
+
+        msg += history_str
+        # <<< END NEW >>>
+
 
         adjust_balance_btn = lang_data.get("user_profile_button_adjust_balance", "💰 Adjust Balance")
         ban_btn_text = lang_data.get("user_profile_button_unban", "✅ Unban User") if is_banned else lang_data.get("user_profile_button_ban", "🚫 Ban User")
@@ -528,7 +564,10 @@ async def handle_view_user_profile(update: Update, context: ContextTypes.DEFAULT
             [InlineKeyboardButton(ban_btn_text, callback_data=f"adm_toggle_ban|{target_user_id}|{offset}")],
             [InlineKeyboardButton(back_list_btn_text, callback_data=f"adm_manage_users|{offset}")]
         ]
-        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+        # Edit message (check length)
+        if len(msg) > 4000: msg = msg[:4000] + "\n[... truncated]"
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None) # Keep parse_mode None
 
     except sqlite3.Error as e:
         logger.error(f"DB error fetching user profile for admin (target: {target_user_id}): {e}", exc_info=True)
@@ -762,3 +801,4 @@ async def handle_toggle_ban_user(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer("An unexpected error occurred.", show_alert=True)
     finally:
         if conn: conn.close()
+# --- END OF FILE viewer_admin.py ---
