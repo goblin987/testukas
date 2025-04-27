@@ -10,6 +10,8 @@ import asyncio
 from datetime import datetime, timedelta
 from collections import defaultdict
 import math # Add math for pagination calculation
+from decimal import Decimal # Ensure Decimal is imported
+
 # Need emoji library for validation (or implement a simpler check)
 # Let's try a simpler check first to avoid adding a dependency
 # import emoji # Optional, for more robust emoji validation
@@ -340,17 +342,29 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return await handle_viewer_admin_menu(update, context)
 
     # --- Primary Admin Dashboard ---
-    total_users, total_balance, active_products = 0, 0.0, 0
+    # <<< MODIFICATION START >>>
+    total_users, total_user_balance, active_products, total_sales_value = 0, Decimal('0.0'), 0, Decimal('0.0')
+    # <<< MODIFICATION END >>>
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
         c.execute("SELECT COUNT(*) as count FROM users")
         res_users = c.fetchone(); total_users = res_users['count'] if res_users else 0
+
+        # Get sum of user wallet balances
         c.execute("SELECT COALESCE(SUM(balance), 0.0) as total_bal FROM users")
-        res_balance = c.fetchone(); total_balance = res_balance['total_bal'] if res_balance else 0.0
+        res_balance = c.fetchone(); total_user_balance = Decimal(str(res_balance['total_bal'])) if res_balance else Decimal('0.0')
+
+        # Get active products
         c.execute("SELECT COUNT(*) as count FROM products WHERE available > reserved")
         res_products = c.fetchone(); active_products = res_products['count'] if res_products else 0
+
+        # <<< NEW: Get total sales value >>>
+        c.execute("SELECT COALESCE(SUM(price_paid), 0.0) as total_sales FROM purchases")
+        res_sales = c.fetchone(); total_sales_value = Decimal(str(res_sales['total_sales'])) if res_sales else Decimal('0.0')
+        # <<< END NEW >>>
+
     except sqlite3.Error as e:
         logger.error(f"DB error fetching admin dashboard data: {e}", exc_info=True)
         error_message = "❌ Error loading admin data."
@@ -362,20 +376,25 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     finally:
         if conn: conn.close()
 
-    total_balance_str = format_currency(total_balance)
+    # <<< MODIFICATION START >>>
+    total_user_balance_str = format_currency(total_user_balance)
+    total_sales_value_str = format_currency(total_sales_value)
     msg = (
        f"🔧 Admin Dashboard (Primary)\n\n"
        f"👥 Total Users: {total_users}\n"
-       f"💰 Total Balance: {total_balance_str} EUR\n"
+       f"💰 Sum of User Balances: {total_user_balance_str} EUR\n" # Clarified Label
+       f"📈 Total Sales Value: {total_sales_value_str} EUR\n"     # Added Sales Value
        f"📦 Active Products: {active_products}\n\n"
        "Select an action:"
     )
-    # --- MODIFIED KEYBOARD ---
+    # <<< MODIFICATION END >>>
+
+    # --- Keyboard remains the same ---
     keyboard = [
         [InlineKeyboardButton("📊 Sales Analytics", callback_data="sales_analytics_menu")],
         [InlineKeyboardButton("➕ Add Products", callback_data="adm_city")],
         [InlineKeyboardButton("🗑️ Manage Products", callback_data="adm_manage_products")],
-        [InlineKeyboardButton("👥 Manage Users", callback_data="adm_manage_users|0")], # <-- MODIFIED/ADDED
+        [InlineKeyboardButton("👥 Manage Users", callback_data="adm_manage_users|0")],
         [InlineKeyboardButton("🏷️ Manage Discounts", callback_data="adm_manage_discounts")],
         [InlineKeyboardButton("📦 View Bot Stock", callback_data="view_stock")],
         [InlineKeyboardButton("🗺️ Manage Districts", callback_data="adm_manage_districts")],
@@ -390,6 +409,7 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     # -----------------------
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # Sending/Editing logic remains the same
     if query:
         try:
             await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode=None)
@@ -403,6 +423,7 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             await send_message_with_retry(context.bot, chat_id, msg, reply_markup=reply_markup, parse_mode=None)
     else:
         await send_message_with_retry(context.bot, chat_id, msg, reply_markup=reply_markup, parse_mode=None)
+
 
 # --- Sales Analytics Handlers ---
 async def handle_sales_analytics_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
