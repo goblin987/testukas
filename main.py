@@ -17,7 +17,7 @@ import hashlib
 
 
 # --- Telegram Imports ---
-from telegram import Update, BotCommand, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, BotCommand, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup # <<< Added InlineKeyboardMarkup
 from telegram.ext import (
     Application, ApplicationBuilder, Defaults, ContextTypes,
     CommandHandler, CallbackQueryHandler, MessageHandler, filters,
@@ -43,7 +43,8 @@ from utils import (
     get_db_connection, # Import the DB connection helper
     DATABASE_PATH, # Import DB path if needed for direct error checks (optional)
     get_pending_deposit, remove_pending_deposit, FEE_ADJUSTMENT, # Import deposit/price utils ## REMOVED get_currency_to_eur_price ##
-    send_message_with_retry # Import send_message_with_retry
+    send_message_with_retry, # Import send_message_with_retry
+    log_admin_action # Import admin logging
 )
 from user import (
     start, handle_shop, handle_city_selection, handle_district_selection,
@@ -54,7 +55,12 @@ from user import (
     handle_view_reviews, handle_leave_review_message, handle_back_start,
     handle_user_discount_code_message, apply_discount_start, remove_discount,
     handle_leave_review_now, handle_refill, handle_view_history,
-    handle_refill_amount_message, validate_discount_code
+    handle_refill_amount_message, validate_discount_code,
+    # <<< NEW Basket Payment Handlers >>>
+    handle_apply_discount_basket_pay,
+    handle_skip_discount_basket_pay,
+    handle_basket_discount_code_message,
+    _show_crypto_choices_for_basket # Import the helper if needed directly (though unlikely)
 )
 from admin import (
     handle_admin_menu, handle_sales_analytics_menu, handle_sales_dashboard,
@@ -148,9 +154,13 @@ def callback_query_router(func):
                 "refill": handle_refill,
                 "view_history": handle_view_history,
                 "apply_discount_start": apply_discount_start, "remove_discount": remove_discount,
-                # Payment Handlers (NOWPayments)
-                "confirm_pay": payment.handle_confirm_pay, # Payment via balance
-                "select_refill_crypto": payment.handle_select_refill_crypto, # Crypto selection triggers NOWPayments
+                # Basket Payment Flow Handlers
+                "confirm_pay": payment.handle_confirm_pay, # Main entry point (balance or crypto path)
+                "apply_discount_basket_pay": handle_apply_discount_basket_pay, # <<< NEW
+                "skip_discount_basket_pay": handle_skip_discount_basket_pay,   # <<< NEW
+                "select_basket_crypto": payment.handle_select_basket_crypto,   # <<< NEW
+                # Refill Flow Handlers
+                "select_refill_crypto": payment.handle_select_refill_crypto, # Crypto selection triggers NOWPayments (refill only)
                 # Primary Admin Handlers
                 "admin_menu": handle_admin_menu,
                 "sales_analytics_menu": handle_sales_analytics_menu, "sales_dashboard": handle_sales_dashboard,
@@ -233,6 +243,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     STATE_HANDLERS = {
         'awaiting_review': handle_leave_review_message,
         'awaiting_user_discount_code': handle_user_discount_code_message,
+        'awaiting_basket_discount_code': handle_basket_discount_code_message, # <<< NEW
         # Admin Message Handlers
         'awaiting_new_city_name': handle_adm_add_city_message,
         'awaiting_edit_city_name': handle_adm_edit_city_message,
@@ -254,6 +265,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # --- Refill ---
         'awaiting_refill_amount': handle_refill_amount_message,
         'awaiting_refill_crypto_choice': None, # Handled by callback
+        'awaiting_basket_crypto_choice': None, # <<< NEW: Also handled by callback
         # --- User Management States ---
         'awaiting_balance_adjustment_amount': handle_adjust_balance_amount_message,
         'awaiting_balance_adjustment_reason': handle_adjust_balance_reason_message,
@@ -404,52 +416,37 @@ def verify_nowpayments_signature(request_data, signature_header, secret_key):
     """Verifies the signature provided by NOWPayments."""
     if not secret_key or not signature_header:
         logger.warning("IPN Secret Key or signature header missing. Cannot verify webhook.")
-        # Decide if you want to proceed without verification (less secure)
-        # or return False immediately. Returning False is safer.
         return False
 
-    # Ensure request_data is sorted correctly before hashing
-    # NOWPayments typically requires the raw JSON body sorted alphabetically by key
     try:
-        # Get raw data as bytes, decode, load as json, sort, dump back to string, encode
-        raw_body = request.get_data() # Get raw bytes
-        # Need to sort the keys of the JSON payload alphabetically
+        raw_body = request.get_data()
         ordered_data = json.dumps(json.loads(raw_body), sort_keys=True)
-        # Calculate HMAC-SHA512 hash
-        hmac_hash = hmac.new(
-            secret_key.encode('utf-8'),
-            ordered_data.encode('utf-8'),
-            hashlib.sha512
-        ).hexdigest()
-
+        hmac_hash = hmac.new(secret_key.encode('utf-8'), ordered_data.encode('utf-8'), hashlib.sha512).hexdigest()
         logger.debug(f"Calculated HMAC: {hmac_hash}")
         logger.debug(f"Received Signature: {signature_header}")
-
-        # Compare calculated hash with the signature from the header
         return hmac.compare_digest(hmac_hash, signature_header)
     except Exception as e:
         logger.error(f"Error during signature verification: {e}", exc_info=True)
         return False
-# ****************************************************
 
 
+# --- MODIFIED Webhook Handler ---
 @flask_app.route("/webhook", methods=['POST'])
 def nowpayments_webhook():
     """Handles Instant Payment Notifications (IPN) from NOWPayments."""
-    global telegram_app, main_loop, NOWPAYMENTS_IPN_SECRET # Make sure secret is accessible
+    global telegram_app, main_loop, NOWPAYMENTS_IPN_SECRET
 
     if not telegram_app or not main_loop:
         logger.error("Webhook received but Telegram app or event loop not initialized.")
-        return Response(status=503) # Service Unavailable
+        return Response(status=503)
 
-    # --- SIGNATURE VERIFICATION (Ensure this is enabled in production!) ---
+    # --- SIGNATURE VERIFICATION (Enable in production!) ---
     # signature = request.headers.get('x-nowpayments-sig')
     # if not verify_nowpayments_signature(request, signature, NOWPAYMENTS_IPN_SECRET):
     #     logger.error("Invalid NOWPayments webhook signature received or verification failed.")
-    #     return Response("Invalid Signature", status=401) # Unauthorized
+    #     return Response("Invalid Signature", status=401)
     # logger.info("NOWPayments webhook signature verified.")
-    logger.warning("!!! NOWPayments signature verification is temporarily disabled !!!") # REMOVE THIS LINE IN PRODUCTION
-    # ---------------------------------------------------------------------------
+    logger.warning("!!! NOWPayments signature verification is temporarily disabled !!!")
 
     if not request.is_json:
         logger.warning("Webhook received non-JSON request.")
@@ -467,62 +464,98 @@ def nowpayments_webhook():
     status = data.get('payment_status')
     pay_currency = data.get('pay_currency')
     actually_paid_str = data.get('actually_paid')
+    parent_payment_id = data.get('parent_payment_id') # Check if it's a child payment
 
-    lang_data = LANGUAGES.get('en', {}) # Default language
+    # Ignore child payments for initial processing (overpayments/refunds handled separately if needed)
+    if parent_payment_id:
+         logger.info(f"Ignoring child payment webhook update {payment_id} (parent: {parent_payment_id}).")
+         return Response("Child payment ignored", status=200)
 
-    # --- Process 'finished', 'confirmed', OR 'partially_paid' status --- <<< MODIFIED HERE
+    # --- Process 'finished', 'confirmed', OR 'partially_paid' status ---
     if status in ['finished', 'confirmed', 'partially_paid'] and actually_paid_str is not None:
         logger.info(f"Processing '{status}' payment: {payment_id}")
         try:
             actually_paid_decimal = Decimal(str(actually_paid_str))
             if actually_paid_decimal <= 0:
-                # Even for partially_paid, if actually_paid is 0, ignore it.
-                logger.warning(f"Ignoring webhook for payment {payment_id} with zero or negative 'actually_paid' amount: {actually_paid_decimal}")
-                # Consider removing pending if status is 'finished' or 'partially_paid' with 0 amount? Optional.
-                # if status != 'confirmed':
-                #     asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id), main_loop)
+                logger.warning(f"Ignoring webhook for payment {payment_id} with zero or negative 'actually_paid': {actually_paid_decimal}")
+                if status != 'confirmed': # Remove pending only if not confirmed yet (or failed/expired later)
+                    asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id, trigger="zero_paid"), main_loop)
                 return Response("Zero amount paid", status=200)
 
             pending_info = asyncio.run_coroutine_threadsafe(
                 asyncio.to_thread(get_pending_deposit, payment_id), main_loop
             ).result()
 
-            if pending_info:
-                user_id = pending_info['user_id']
-                stored_currency = pending_info['currency']
-                target_eur_decimal = Decimal(str(pending_info['target_eur_amount']))
-                expected_crypto_decimal = Decimal(str(pending_info.get('expected_crypto_amount', '0.0')))
+            if not pending_info:
+                 logger.warning(f"Webhook Warning: Received update for payment ID {payment_id}, but no pending deposit found in DB.")
+                 return Response("Pending deposit not found", status=200) # Acknowledge, but nothing to process
 
-                if stored_currency.lower() != pay_currency.lower():
-                     logger.error(f"Currency mismatch for {payment_id}. DB: {stored_currency}, Webhook: {pay_currency}")
-                     asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id), main_loop)
-                     return Response("Currency mismatch", status=400)
+            user_id = pending_info['user_id']
+            stored_currency = pending_info['currency']
+            target_eur_decimal = Decimal(str(pending_info['target_eur_amount']))
+            expected_crypto_decimal = Decimal(str(pending_info.get('expected_crypto_amount', '0.0')))
+            is_purchase = pending_info.get('is_purchase') == 1
+            basket_snapshot = pending_info.get('basket_snapshot') # Might be None
+            discount_code_used = pending_info.get('discount_code_used') # Might be None
+            log_prefix = "PURCHASE" if is_purchase else "REFILL"
 
-                # --- Calculate Credited EUR Amount (Proportional Logic) ---
+            if stored_currency.lower() != pay_currency.lower():
+                 logger.error(f"Currency mismatch for {log_prefix} {payment_id}. DB: {stored_currency}, Webhook: {pay_currency}")
+                 asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id, trigger="currency_mismatch"), main_loop)
+                 return Response("Currency mismatch", status=400)
+
+            # --- Check if enough crypto was paid for direct purchase ---
+            if is_purchase:
+                # For direct purchases, we currently require the exact (or more) crypto amount
+                # Allowing underpayment for direct purchases adds complexity (partial fulfillment?)
+                if expected_crypto_decimal > 0 and actually_paid_decimal < expected_crypto_decimal:
+                    logger.warning(f"{log_prefix} {payment_id} UNDERPAID by user {user_id}. Expected {expected_crypto_decimal} {pay_currency}, received {actually_paid_decimal}. Purchase failed.")
+                    # Notify user about underpayment and failure
+                    lang_data_en = LANGUAGES.get('en', {}) # Use default for internal messages
+                    fail_msg = lang_data_en.get("crypto_purchase_failed", "Payment Failed/Expired. Your items are no longer reserved.")
+                    dummy_context = ContextTypes.DEFAULT_TYPE(application=telegram_app, chat_id=user_id, user_id=user_id) # Needed for send_message_with_retry context
+                    asyncio.run_coroutine_threadsafe(
+                        send_message_with_retry(telegram_app.bot, user_id, fail_msg, parse_mode=None), main_loop
+                    )
+                    # Remove pending record, triggering item un-reservation
+                    asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id, trigger="failure"), main_loop)
+                    return Response("Underpaid for purchase", status=200) # Acknowledge webhook
+
+                # If paid enough or more, proceed to finalize purchase
+                logger.info(f"{log_prefix} {payment_id} SUFFICIENTLY PAID by user {user_id}. Finalizing purchase.")
+                dummy_context = ContextTypes.DEFAULT_TYPE(application=telegram_app, chat_id=user_id, user_id=user_id)
+                future = asyncio.run_coroutine_threadsafe(
+                    payment.process_successful_crypto_purchase(user_id, basket_snapshot, discount_code_used, payment_id, dummy_context),
+                    main_loop
+                )
+                try:
+                    purchase_finalized = future.result(timeout=60) # Longer timeout for purchase logic
+                    if purchase_finalized:
+                        # Remove pending deposit ONLY after successful finalization
+                        asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id, trigger="purchase_success"), main_loop)
+                        logger.info(f"Successfully processed and removed pending record for {log_prefix} {payment_id}")
+                    else:
+                        logger.critical(f"CRITICAL: {log_prefix} {payment_id} paid, but process_successful_crypto_purchase FAILED for user {user_id}. Pending deposit NOT removed. Manual intervention required.")
+                        # Maybe notify admin?
+                        if ADMIN_ID:
+                           asyncio.run_coroutine_threadsafe(send_message_with_retry(telegram_app.bot, ADMIN_ID, f"⚠️ CRITICAL: Crypto purchase {payment_id} paid by user {user_id} but FAILED TO FINALIZE. Check logs!"), main_loop)
+                except asyncio.TimeoutError:
+                     logger.error(f"Timeout waiting for process_successful_crypto_purchase result for {payment_id}. Pending deposit NOT removed.")
+                except Exception as e:
+                     logger.error(f"Error getting result from process_successful_crypto_purchase for {payment_id}: {e}. Pending deposit NOT removed.", exc_info=True)
+
+            else: # --- Handle Refill (existing logic) ---
                 credited_eur_amount = Decimal('0.0')
                 if expected_crypto_decimal > 0:
-                    # ALWAYS calculate proportionally based on what was actually paid vs expected
                     proportion = actually_paid_decimal / expected_crypto_decimal
                     credited_eur_amount = (proportion * target_eur_decimal)
-                    payment_comparison = "paid exact"
-                    if actually_paid_decimal > expected_crypto_decimal:
-                        payment_comparison = "overpaid"
-                    elif actually_paid_decimal < expected_crypto_decimal:
-                        payment_comparison = "underpaid"
-
-                    logger.info(f"Payment {payment_id} ({status}): User {user_id} {payment_comparison} ({actually_paid_decimal} {pay_currency} vs expected {expected_crypto_decimal}). Crediting proportional {credited_eur_amount:.8f} EUR (based on target {target_eur_decimal} EUR).")
-
+                    logger.info(f"{log_prefix} {payment_id} ({status}): User {user_id} paid {actually_paid_decimal} / {expected_crypto_decimal} {pay_currency}. Crediting proportional {credited_eur_amount:.8f} EUR.")
                 else:
-                    # Fallback: If expected amount wasn't stored correctly. Log error.
-                    logger.error(f"Payment {payment_id} ({status}): Could not calculate proportional credit for user {user_id} because expected_crypto_amount was zero or invalid in DB ({pending_info.get('expected_crypto_amount')}). Crediting 0 EUR.")
-                    credited_eur_amount = Decimal('0.0')
-                # --- END Proportional Logic ---
+                    logger.error(f"{log_prefix} {payment_id} ({status}): Could not calculate proportional credit for user {user_id} (expected amount zero). Crediting 0 EUR.")
 
-                # Apply fee adjustment and round down to cents
                 credited_eur_amount = (credited_eur_amount * FEE_ADJUSTMENT).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
-                logger.info(f"Payment {payment_id} ({status}): Final credited amount after fee adjustment ({FEE_ADJUSTMENT}) and rounding: {credited_eur_amount:.2f} EUR.")
+                logger.info(f"{log_prefix} {payment_id} ({status}): Final refill credit after fee/rounding: {credited_eur_amount:.2f} EUR.")
 
-                # --- Process Refill ---
                 if credited_eur_amount > 0:
                     dummy_context = ContextTypes.DEFAULT_TYPE(application=telegram_app, chat_id=user_id, user_id=user_id)
                     future = asyncio.run_coroutine_threadsafe(
@@ -532,70 +565,72 @@ def nowpayments_webhook():
                     try:
                          db_update_success = future.result(timeout=30)
                          if db_update_success:
-                              # Remove pending deposit ONLY after successful balance update
-                              asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id), main_loop)
+                              asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id, trigger="refill_success"), main_loop)
                               logger.info(f"Successfully processed and removed pending deposit {payment_id} (Status: {status})")
                          else:
-                              # CRITICAL: Payment processed, but DB update failed. DO NOT remove pending deposit.
-                              logger.critical(f"CRITICAL: Payment {payment_id} ({status}) processed, but process_successful_refill failed for user {user_id}. Balance NOT updated. Pending deposit NOT removed. Manual intervention required.")
+                              logger.critical(f"CRITICAL: {log_prefix} {payment_id} ({status}) processed, but process_successful_refill FAILED for user {user_id}. Pending deposit NOT removed. Manual intervention required.")
                     except asyncio.TimeoutError:
                          logger.error(f"Timeout waiting for process_successful_refill result for {payment_id}. Pending deposit NOT removed.")
                     except Exception as e:
                          logger.error(f"Error getting result from process_successful_refill for {payment_id}: {e}. Pending deposit NOT removed.", exc_info=True)
                 else:
-                    # If calculated credit is zero (e.g., significant underpayment resulted in < 0.01 EUR), remove pending deposit
-                    logger.warning(f"Payment {payment_id} ({status}): Calculated credited EUR is zero for user {user_id}. Removing pending deposit without updating balance.")
-                    asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id), main_loop)
-
-            else:
-                # Handle cases where webhook arrives but no pending deposit found
-                parent_payment_id = data.get('parent_payment_id')
-                if parent_payment_id:
-                     logger.warning(f"Webhook Warning: Received update for payment ID {payment_id} (child of {parent_payment_id}), but no primary pending deposit found for {payment_id}. Might be overpayment/refund difference.")
-                else:
-                    logger.warning(lang_data.get("webhook_pending_not_found", "Webhook Warning: Received update for payment ID {payment_id}, but no pending deposit found in DB.").format(payment_id=payment_id))
+                    logger.warning(f"{log_prefix} {payment_id} ({status}): Calculated credited EUR is zero for user {user_id}. Removing pending deposit without updating balance.")
+                    asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id, trigger="zero_credit"), main_loop)
 
         except (ValueError, TypeError) as e:
             logger.error(f"Webhook Error: Invalid number format in webhook data for {payment_id}. Error: {e}. Data: {data}")
         except Exception as e:
-            logger.error(lang_data.get("webhook_processing_error", "Webhook Error: Could not process payment update {payment_id}.").format(payment_id=payment_id), exc_info=True)
+            logger.error(f"Webhook Error: Could not process payment update {payment_id}.", exc_info=True)
 
-    # --- Process other statuses (failed, expired, etc.) --- <<< MODIFIED HERE
-    elif status in ['failed', 'expired', 'refunded']: # Removed 'partially_paid'
+    # --- Process other statuses (failed, expired, etc.) ---
+    elif status in ['failed', 'expired', 'refunded']:
         logger.warning(f"Payment {payment_id} has status '{status}'. Removing pending record.")
-        # Check if pending deposit exists before trying to notify user
+        # Get pending info to check if it was a purchase and notify user
         pending_info_for_removal = None
         try:
             pending_info_for_removal = asyncio.run_coroutine_threadsafe(
                  asyncio.to_thread(get_pending_deposit, payment_id), main_loop
-            ).result(timeout=5) # Add timeout
+            ).result(timeout=5)
         except Exception as e:
             logger.error(f"Error checking pending deposit for {payment_id} before removal/notification: {e}")
 
-        # Remove pending deposit record from DB regardless of notification success
-        removal_done = False
-        try:
-            removal_done = asyncio.run_coroutine_threadsafe(
-                asyncio.to_thread(remove_pending_deposit, payment_id), main_loop
-            ).result(timeout=5) # Add timeout
-        except Exception as e:
-            logger.error(f"Error removing pending deposit {payment_id} for status '{status}': {e}")
+        # Remove pending deposit record from DB (this now also handles un-reserving items if it was a purchase)
+        asyncio.run_coroutine_threadsafe(
+            asyncio.to_thread(remove_pending_deposit, payment_id, trigger="failure" if status == 'failed' else "expiry"), # Pass trigger
+            main_loop
+        )
 
-
-        # Optionally notify user only if removal was successful and info was retrieved
-        if removal_done and pending_info_for_removal and telegram_app:
+        # Notify user if possible
+        if pending_info_for_removal and telegram_app:
             user_id = pending_info_for_removal['user_id']
+            is_purchase_failure = pending_info_for_removal.get('is_purchase') == 1
             try:
-                lang = 'en' # Default for webhook context
-                lang_data_local = LANGUAGES.get(lang, LANGUAGES['en'])
-                cancelled_msg = lang_data_local.get("payment_cancelled_or_expired", "Payment Status: Your payment ({payment_id}) was cancelled or expired.").format(payment_id=payment_id)
+                # Get user's language for notification
+                conn_lang = None; user_lang = 'en'
+                try:
+                    conn_lang = get_db_connection()
+                    c_lang = conn_lang.cursor()
+                    c_lang.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+                    lang_res = c_lang.fetchone()
+                    if lang_res and lang_res['language'] in LANGUAGES: user_lang = lang_res['language']
+                except Exception as lang_e: logger.error(f"Failed to get lang for user {user_id} notify: {lang_e}")
+                finally:
+                     if conn_lang: conn_lang.close()
+
+                lang_data_local = LANGUAGES.get(user_lang, LANGUAGES['en'])
+                # Send different message for failed purchase vs failed refill
+                if is_purchase_failure:
+                     fail_msg = lang_data_local.get("crypto_purchase_failed", "Payment Failed/Expired. Your items are no longer reserved.")
+                else:
+                     fail_msg = lang_data_local.get("payment_cancelled_or_expired", "Payment Status: Your payment ({payment_id}) was cancelled or expired.").format(payment_id=payment_id)
+
+                dummy_context = ContextTypes.DEFAULT_TYPE(application=telegram_app, chat_id=user_id, user_id=user_id)
                 asyncio.run_coroutine_threadsafe(
-                     send_message_with_retry(telegram_app.bot, user_id, cancelled_msg, parse_mode=None),
+                     send_message_with_retry(telegram_app.bot, user_id, fail_msg, parse_mode=None),
                      main_loop
                 )
             except Exception as notify_e:
-                 logger.error(f"Error notifying user {user_id} about cancelled/expired payment {payment_id}: {notify_e}")
-
+                 logger.error(f"Error notifying user {user_id} about failed/expired payment {payment_id}: {notify_e}")
 
     else:
          # Ignores 'waiting', 'confirming', 'sending', etc.
