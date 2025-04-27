@@ -278,20 +278,21 @@ async def handle_shop(update: Update, context: ContextTypes.DEFAULT_TYPE, params
         try: keyboard = [[InlineKeyboardButton(f"{EMOJI_HOME} {home_button_text}", callback_data="back_start")]]; await query.edit_message_text("❌ An error occurred.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
         except Exception as inner_e: logger.error(f"Failed fallback in handle_shop: {inner_e}")
 
-
+# --- MODIFIED handle_city_selection ---
 async def handle_city_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
-    user_id = query.from_user.id # <<< Added for logging
+    user_id = query.from_user.id # Added for logging
     lang, lang_data = _get_lang_data(context)
+
     if not params:
-        logger.warning(f"handle_city_selection called without city_id for user {user_id}.") # <<< Added logging
+        logger.warning(f"handle_city_selection called without city_id for user {user_id}.")
         await query.answer("Error: City ID missing.", show_alert=True)
         return
     city_id = params[0]
-    city_name = CITIES.get(city_id) # <<< Changed variable name from 'city' to 'city_name' for clarity
+    city_name = CITIES.get(city_id)
     if not city_name:
         error_city_not_found = lang_data.get("error_city_not_found", "Error: City not found.")
-        logger.warning(f"City ID {city_id} not found in CITIES for user {user_id}.") # <<< Added logging
+        logger.warning(f"City ID {city_id} not found in CITIES for user {user_id}.")
         await query.edit_message_text(f"❌ {error_city_not_found}", parse_mode=None)
         return await handle_shop(update, context) # Go back to city selection
 
@@ -299,20 +300,19 @@ async def handle_city_selection(update: Update, context: ContextTypes.DEFAULT_TY
     back_cities_button = lang_data.get("back_cities_button", "Back to Cities")
     home_button = lang_data.get("home_button", "Home")
     no_districts_msg = lang_data.get("no_districts_available", "No districts available yet for this city.")
-    # <<< NEW language string needed >>>
     no_products_in_districts_msg = lang_data.get("no_products_in_city_districts", "No products currently available in any district of this city.")
     choose_district_prompt = lang_data.get("choose_district_prompt", "Choose a district:")
-    error_loading_districts = lang_data.get("error_loading_districts", "Error loading districts. Please try again.") # <<< NEW language string
-
-    # --- MODIFICATION START ---
+    error_loading_districts = lang_data.get("error_loading_districts", "Error loading districts. Please try again.")
+    available_label_short = lang_data.get("available_label_short", "Av") # Get short available label
 
     keyboard = []
-    districts_with_products_found = False # Flag to track if we find any valid districts
+    message_text_parts = [f"{EMOJI_CITY} {city_name}\n\n"] # Start message
+    districts_with_products_info = [] # Store tuples: (d_id, dist_name)
 
     if not districts_in_city:
         # If no districts are configured AT ALL for the city
-        keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_cities_button}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
-        await query.edit_message_text(f"{EMOJI_CITY} {city_name}\n\n{no_districts_msg}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        keyboard_nav = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_cities_button}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
+        await query.edit_message_text(f"{EMOJI_CITY} {city_name}\n\n{no_districts_msg}", reply_markup=InlineKeyboardMarkup(keyboard_nav), parse_mode=None)
         return
     else:
         # If districts are configured, check each one for products
@@ -325,47 +325,69 @@ async def handle_city_selection(update: Update, context: ContextTypes.DEFAULT_TY
             for d_id in sorted_district_ids:
                 dist_name = districts_in_city.get(d_id)
                 if dist_name:
-                    # Query to check if there are any available products in this specific district
+                    # NEW Query for detailed product summary in this district
                     c.execute("""
-                        SELECT 1
+                        SELECT product_type, size, price, COUNT(*) as quantity
                         FROM products
                         WHERE city = ? AND district = ? AND available > reserved
-                        LIMIT 1
+                        GROUP BY product_type, size, price
+                        ORDER BY product_type, price, size
                     """, (city_name, dist_name))
-                    product_exists = c.fetchone()
+                    products_in_district = c.fetchall()
 
-                    if product_exists:
-                        # Only add the button if at least one available product exists
-                        keyboard.append([InlineKeyboardButton(f"{EMOJI_DISTRICT} {dist_name}", callback_data=f"dist|{city_id}|{d_id}")])
-                        districts_with_products_found = True
-                    else:
-                         # Optional: Log districts being hidden
-                         logger.debug(f"Hiding district '{dist_name}' (ID: {d_id}) in city '{city_name}' for user {user_id} - no available products.")
+                    if products_in_district:
+                        # Add district header to message text
+                        message_text_parts.append(f"{EMOJI_DISTRICT} **{dist_name}:**\n") # Make district bold
+                        # Add product details to message text
+                        for prod in products_in_district:
+                            prod_emoji = PRODUCT_TYPES.get(prod['product_type'], DEFAULT_PRODUCT_EMOJI)
+                            price_str = format_currency(prod['price'])
+                            # Use plain text for product summary to avoid Markdown issues
+                            message_text_parts.append(f"  • {prod_emoji} {prod['product_type']} {prod['size']} ({price_str}€) - {prod['quantity']} {available_label_short}\n")
+                        message_text_parts.append("\n") # Add space after district info
+                        # Add district to list for button creation
+                        districts_with_products_info.append((d_id, dist_name))
+                    # else: District has no products, do nothing (it's skipped)
                 else:
                     logger.warning(f"District name missing for ID {d_id} in city {city_id} (handle_city_selection)")
 
         except sqlite3.Error as e:
             logger.error(f"DB error checking product availability for districts in city {city_name} (ID: {city_id}) for user {user_id}: {e}")
-            # Show a generic error to the user
             keyboard_error = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_cities_button}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
             await query.edit_message_text(f"{EMOJI_CITY} {city_name}\n\n❌ {error_loading_districts}", reply_markup=InlineKeyboardMarkup(keyboard_error), parse_mode=None)
-            if conn: conn.close() # Close connection before returning
+            if conn: conn.close()
             return # Stop processing on DB error
         finally:
             if conn:
                 conn.close()
 
         # After checking all districts:
-        if not districts_with_products_found:
+        if not districts_with_products_info:
             # If we looped through all configured districts but none had products
-            keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_cities_button}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
-            await query.edit_message_text(f"{EMOJI_CITY} {city_name}\n\n{no_products_in_districts_msg}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+            keyboard_nav = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_cities_button}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
+            await query.edit_message_text(f"{EMOJI_CITY} {city_name}\n\n{no_products_in_districts_msg}", reply_markup=InlineKeyboardMarkup(keyboard_nav), parse_mode=None)
         else:
-            # If we found at least one district with products, add navigation buttons and show the list
-            keyboard.append([InlineKeyboardButton(f"{EMOJI_BACK} {back_cities_button}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")])
-            await query.edit_message_text(f"{EMOJI_CITY} {city_name}\n\n{choose_district_prompt}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+            message_text_parts.append(f"\n{choose_district_prompt}") # Add prompt below details
+            final_message = "".join(message_text_parts)
+            # Create buttons ONLY for districts with products
+            for d_id, dist_name in districts_with_products_info:
+                 keyboard.append([InlineKeyboardButton(f"{EMOJI_DISTRICT} {dist_name}", callback_data=f"dist|{city_id}|{d_id}")])
 
-    # --- MODIFICATION END ---
+            keyboard.append([InlineKeyboardButton(f"{EMOJI_BACK} {back_cities_button}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")])
+
+            # Check length and edit message
+            # Use parse_mode=None since we formatted manually and bold might fail
+            try:
+                if len(final_message) > 4000:
+                    final_message = final_message[:4000] + "\n\n[... Message truncated ...]"
+                    logger.warning(f"District selection message for user {user_id} city {city_name} truncated.")
+                await query.edit_message_text(final_message, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+            except telegram_error.BadRequest as e:
+                if "message is not modified" not in str(e).lower():
+                    logger.error(f"Error editing district selection message: {e}")
+                    await query.answer("Error displaying districts.", show_alert=True)
+                else:
+                    await query.answer() # Acknowledge if not modified
 
 
 async def handle_district_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
