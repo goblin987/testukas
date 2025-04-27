@@ -42,7 +42,7 @@ from utils import (
     # *************************************
     get_db_connection, # Import the DB connection helper
     DATABASE_PATH, # Import DB path if needed for direct error checks (optional)
-    get_pending_deposit, remove_pending_deposit, FEE_ADJUSTMENT, # Import deposit/price utils ## REMOVED get_currency_to_eur_price ##
+    get_pending_deposit, remove_pending_deposit, FEE_ADJUSTMENT, # Import deposit/price utils
     send_message_with_retry, # Import send_message_with_retry
     log_admin_action # Import admin logging
 )
@@ -61,6 +61,7 @@ from user import (
     handle_skip_discount_basket_pay,
     handle_basket_discount_code_message,
     _show_crypto_choices_for_basket # Import the helper if needed directly (though unlikely)
+    # <<< NOTE: user.handle_confirm_pay is NOT imported here, it's called via payment.handle_confirm_pay >>>
 )
 from admin import (
     handle_admin_menu, handle_sales_analytics_menu, handle_sales_dashboard,
@@ -105,8 +106,8 @@ from viewer_admin import (
     handle_adjust_balance_reason_message # Message handler
     # ---------------------------------------------------------------
 )
-# Import payment module for processing refill
-import payment # Changed from specific imports to module import
+# Import payment module for processing refill AND the wrapper
+import payment # <<< Imports payment module
 from stock import handle_view_stock
 
 # --- Logging Setup ---
@@ -155,12 +156,12 @@ def callback_query_router(func):
                 "view_history": handle_view_history,
                 "apply_discount_start": apply_discount_start, "remove_discount": remove_discount,
                 # Basket Payment Flow Handlers
-                "confirm_pay": payment.handle_confirm_pay, # Main entry point (balance or crypto path)
-                "apply_discount_basket_pay": handle_apply_discount_basket_pay, # <<< NEW
-                "skip_discount_basket_pay": handle_skip_discount_basket_pay,   # <<< NEW
-                "select_basket_crypto": payment.handle_select_basket_crypto,   # <<< NEW
+                "confirm_pay": payment.handle_confirm_pay, # <<< POINTS TO PAYMENT WRAPPER
+                "apply_discount_basket_pay": handle_apply_discount_basket_pay,
+                "skip_discount_basket_pay": handle_skip_discount_basket_pay,
+                "select_basket_crypto": payment.handle_select_basket_crypto,
                 # Refill Flow Handlers
-                "select_refill_crypto": payment.handle_select_refill_crypto, # Crypto selection triggers NOWPayments (refill only)
+                "select_refill_crypto": payment.handle_select_refill_crypto,
                 # Primary Admin Handlers
                 "admin_menu": handle_admin_menu,
                 "sales_analytics_menu": handle_sales_analytics_menu, "sales_dashboard": handle_sales_dashboard,
@@ -197,10 +198,10 @@ def callback_query_router(func):
                 "adm_manage_reviews": handle_adm_manage_reviews,
                 "adm_delete_review_confirm": handle_adm_delete_review_confirm,
                 # --- User Management Callbacks ---
-                "adm_manage_users": handle_manage_users_start, # Entry point (pagination)
-                "adm_view_user": handle_view_user_profile, # View specific user
-                "adm_adjust_balance_start": handle_adjust_balance_start, # Start balance adj.
-                "adm_toggle_ban": handle_toggle_ban_user, # Ban/unban user
+                "adm_manage_users": handle_manage_users_start,
+                "adm_view_user": handle_view_user_profile,
+                "adm_adjust_balance_start": handle_adjust_balance_start,
+                "adm_toggle_ban": handle_toggle_ban_user,
                 # -----------------------------------
                 # Stock Handler
                 "view_stock": handle_view_stock,
@@ -243,7 +244,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     STATE_HANDLERS = {
         'awaiting_review': handle_leave_review_message,
         'awaiting_user_discount_code': handle_user_discount_code_message,
-        'awaiting_basket_discount_code': handle_basket_discount_code_message, # <<< NEW
+        'awaiting_basket_discount_code': handle_basket_discount_code_message, # <<< NEW state
         # Admin Message Handlers
         'awaiting_new_city_name': handle_adm_add_city_message,
         'awaiting_edit_city_name': handle_adm_edit_city_message,
@@ -265,7 +266,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # --- Refill ---
         'awaiting_refill_amount': handle_refill_amount_message,
         'awaiting_refill_crypto_choice': None, # Handled by callback
-        'awaiting_basket_crypto_choice': None, # <<< NEW: Also handled by callback
+        'awaiting_basket_crypto_choice': None, # Also handled by callback
         # --- User Management States ---
         'awaiting_balance_adjustment_amount': handle_adjust_balance_amount_message,
         'awaiting_balance_adjustment_reason': handle_adjust_balance_reason_message,
@@ -362,6 +363,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
              if "'NoneType' object has no attribute 'get'" in str(context.error) and "_process_collected_media" in str(context.error.__traceback__):
                  logger.error("Error likely due to missing user_data in job context.")
                  error_message = "An internal processing error occurred (media group). Please try again."
+             # Check if it's the one from the main webhook handler
+             elif "'module' object has no attribute" in str(context.error) and "handle_confirm_pay" in str(context.error):
+                 logger.critical(f"CRITICAL IMPORT ERROR: main.py cannot find handle_confirm_pay in payment.py. Check imports/function name.")
+                 error_message = "A critical configuration error occurred. Please contact support immediately."
              else:
                  error_message = "An unexpected internal error occurred. Please contact support."
         else:
@@ -504,39 +509,40 @@ def nowpayments_webhook():
                  asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id, trigger="currency_mismatch"), main_loop)
                  return Response("Currency mismatch", status=400)
 
-            # --- Check if enough crypto was paid for direct purchase ---
+            # --- DIFFERENCE: Check if it's a purchase or refill ---
             if is_purchase:
-                # For direct purchases, we currently require the exact (or more) crypto amount
-                # Allowing underpayment for direct purchases adds complexity (partial fulfillment?)
+                # --- Handle Purchase Finalization ---
                 if expected_crypto_decimal > 0 and actually_paid_decimal < expected_crypto_decimal:
                     logger.warning(f"{log_prefix} {payment_id} UNDERPAID by user {user_id}. Expected {expected_crypto_decimal} {pay_currency}, received {actually_paid_decimal}. Purchase failed.")
-                    # Notify user about underpayment and failure
-                    lang_data_en = LANGUAGES.get('en', {}) # Use default for internal messages
+                    lang_data_en = LANGUAGES.get('en', {})
                     fail_msg = lang_data_en.get("crypto_purchase_failed", "Payment Failed/Expired. Your items are no longer reserved.")
-                    dummy_context = ContextTypes.DEFAULT_TYPE(application=telegram_app, chat_id=user_id, user_id=user_id) # Needed for send_message_with_retry context
-                    asyncio.run_coroutine_threadsafe(
-                        send_message_with_retry(telegram_app.bot, user_id, fail_msg, parse_mode=None), main_loop
-                    )
-                    # Remove pending record, triggering item un-reservation
+                    # Create a dummy context ONLY if telegram_app is available
+                    dummy_context = ContextTypes.DEFAULT_TYPE(application=telegram_app, chat_id=user_id, user_id=user_id) if telegram_app else None
+                    if dummy_context:
+                        asyncio.run_coroutine_threadsafe(send_message_with_retry(telegram_app.bot, user_id, fail_msg, parse_mode=None), main_loop)
+                    else:
+                         logger.error("Cannot notify user of underpayment, telegram_app not ready.")
                     asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id, trigger="failure"), main_loop)
-                    return Response("Underpaid for purchase", status=200) # Acknowledge webhook
+                    return Response("Underpaid for purchase", status=200)
 
-                # If paid enough or more, proceed to finalize purchase
                 logger.info(f"{log_prefix} {payment_id} SUFFICIENTLY PAID by user {user_id}. Finalizing purchase.")
-                dummy_context = ContextTypes.DEFAULT_TYPE(application=telegram_app, chat_id=user_id, user_id=user_id)
+                dummy_context = ContextTypes.DEFAULT_TYPE(application=telegram_app, chat_id=user_id, user_id=user_id) if telegram_app else None
+                if not dummy_context:
+                     logger.error(f"Cannot finalize purchase {payment_id}, telegram_app not ready.")
+                     # CRITICAL: Payment received but cannot finalize. Leave pending record for manual check.
+                     return Response("Internal error: App not ready", status=500)
+
                 future = asyncio.run_coroutine_threadsafe(
                     payment.process_successful_crypto_purchase(user_id, basket_snapshot, discount_code_used, payment_id, dummy_context),
                     main_loop
                 )
                 try:
-                    purchase_finalized = future.result(timeout=60) # Longer timeout for purchase logic
+                    purchase_finalized = future.result(timeout=60)
                     if purchase_finalized:
-                        # Remove pending deposit ONLY after successful finalization
                         asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id, trigger="purchase_success"), main_loop)
                         logger.info(f"Successfully processed and removed pending record for {log_prefix} {payment_id}")
                     else:
                         logger.critical(f"CRITICAL: {log_prefix} {payment_id} paid, but process_successful_crypto_purchase FAILED for user {user_id}. Pending deposit NOT removed. Manual intervention required.")
-                        # Maybe notify admin?
                         if ADMIN_ID:
                            asyncio.run_coroutine_threadsafe(send_message_with_retry(telegram_app.bot, ADMIN_ID, f"⚠️ CRITICAL: Crypto purchase {payment_id} paid by user {user_id} but FAILED TO FINALIZE. Check logs!"), main_loop)
                 except asyncio.TimeoutError:
@@ -544,7 +550,8 @@ def nowpayments_webhook():
                 except Exception as e:
                      logger.error(f"Error getting result from process_successful_crypto_purchase for {payment_id}: {e}. Pending deposit NOT removed.", exc_info=True)
 
-            else: # --- Handle Refill (existing logic) ---
+            else:
+                # --- Handle Refill (Existing Logic) ---
                 credited_eur_amount = Decimal('0.0')
                 if expected_crypto_decimal > 0:
                     proportion = actually_paid_decimal / expected_crypto_decimal
@@ -557,7 +564,12 @@ def nowpayments_webhook():
                 logger.info(f"{log_prefix} {payment_id} ({status}): Final refill credit after fee/rounding: {credited_eur_amount:.2f} EUR.")
 
                 if credited_eur_amount > 0:
-                    dummy_context = ContextTypes.DEFAULT_TYPE(application=telegram_app, chat_id=user_id, user_id=user_id)
+                    dummy_context = ContextTypes.DEFAULT_TYPE(application=telegram_app, chat_id=user_id, user_id=user_id) if telegram_app else None
+                    if not dummy_context:
+                         logger.error(f"Cannot process refill {payment_id}, telegram_app not ready.")
+                         # CRITICAL: Payment received but cannot add balance. Leave pending record.
+                         return Response("Internal error: App not ready", status=500)
+
                     future = asyncio.run_coroutine_threadsafe(
                         payment.process_successful_refill(user_id, credited_eur_amount, payment_id, dummy_context),
                         main_loop
