@@ -5,7 +5,7 @@ import os
 import logging
 import asyncio
 import shutil
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone # <<< Ensure timezone is imported
 from collections import defaultdict
 import math # For pagination calculation
 from decimal import Decimal # Import Decimal for balance handling
@@ -540,7 +540,10 @@ async def handle_view_user_profile(update: Update, context: ContextTypes.DEFAULT
         else:
             for purchase in recent_purchases:
                 try:
+                    # Ensure purchase_date is treated as UTC if no timezone info
                     dt_obj = datetime.fromisoformat(purchase['purchase_date'].replace('Z', '+00:00'))
+                    if dt_obj.tzinfo is None: dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+                    # Convert to local time if needed, or keep as UTC/formatted
                     date_str = dt_obj.strftime('%y-%m-%d %H:%M') # Shorter date format
                 except (ValueError, TypeError):
                     date_str = "???"
@@ -801,4 +804,5 @@ async def handle_toggle_ban_user(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer("An unexpected error occurred.", show_alert=True)
     finally:
         if conn: conn.close()
+
 # --- END OF FILE viewer_admin.py ---
