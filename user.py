@@ -26,6 +26,9 @@ from utils import (
     get_db_connection, MEDIA_DIR, # Import helper and MEDIA_DIR
     DEFAULT_PRODUCT_EMOJI # Import default emoji
 )
+import json # <<< Make sure json is imported
+import payment # <<< Make sure payment module is imported
+
 
 # Logging setup
 logger = logging.getLogger(__name__)
@@ -278,7 +281,8 @@ async def handle_shop(update: Update, context: ContextTypes.DEFAULT_TYPE, params
         try: keyboard = [[InlineKeyboardButton(f"{EMOJI_HOME} {home_button_text}", callback_data="back_start")]]; await query.edit_message_text("❌ An error occurred.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
         except Exception as inner_e: logger.error(f"Failed fallback in handle_shop: {inner_e}")
 
-# --- MODIFIED handle_city_selection ---
+
+# --- Modified handle_city_selection ---
 async def handle_city_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
     user_id = query.from_user.id # Added for logging
@@ -1028,420 +1032,312 @@ async def handle_clear_basket(update: Update, context: ContextTypes.DEFAULT_TYPE
         if conn: conn.close()
 
 
-# --- Other User Handlers ---
-# (handle_view_history unchanged)
-async def handle_view_history(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    query = update.callback_query
-    user_id = query.from_user.id
-    lang, lang_data = _get_lang_data(context)
-    history = fetch_last_purchases(user_id, limit=10)
-
-    history_title = lang_data.get("purchase_history_title", "Purchase History"); no_history_msg = lang_data.get("no_purchases_yet", "No purchases yet.")
-    recent_purchases_title = lang_data.get("recent_purchases_title", "Recent Purchases"); back_profile_button = lang_data.get("back_profile_button", "Back to Profile")
-    home_button = lang_data.get("home_button", "Home"); unknown_date_label = lang_data.get("unknown_date_label", "Unknown Date")
-
-    if not history: msg = f"📜 {history_title}\n\n{no_history_msg}"; keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_profile_button}", callback_data="profile"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
-    else:
-        msg = f"📜 {recent_purchases_title}\n\n"
-        for i, purchase in enumerate(history):
-            try:
-                dt_obj = datetime.fromisoformat(purchase['purchase_date'].replace('Z', '+00:00'))
-                date_str = dt_obj.strftime('%Y-%m-%d %H:%M')
-            except (ValueError, TypeError): date_str = unknown_date_label
-            name = purchase.get('product_name', 'N/A'); size = purchase.get('product_size', 'N/A')
-            price_str = format_currency(Decimal(str(purchase.get('price_paid', 0.0))))
-            msg += (f"{i+1}. {date_str} - {name} ({size}) - {price_str} EUR\n")
-        keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_profile_button}", callback_data="profile"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
-
-    try: await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-    except telegram_error.BadRequest as e:
-        if "message is not modified" not in str(e).lower(): logger.error(f"Error editing history msg: {e}")
-        else: await query.answer()
-
-
-# --- Language Selection ---
-# (handle_language_selection is the modified version)
-async def handle_language_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Allows the user to select language and immediately refreshes the start menu."""
-    query = update.callback_query
-    user_id = query.from_user.id
-    current_lang, current_lang_data = _get_lang_data(context)
-    username = update.effective_user.username or update.effective_user.first_name or f"User_{user_id}"
-    conn = None
-
-    if params:
-        new_lang = params[0]
-        if new_lang in LANGUAGES:
-            try:
-                conn = get_db_connection()
-                c = conn.cursor()
-                c.execute("UPDATE users SET language = ? WHERE user_id = ?", (new_lang, user_id))
-                conn.commit()
-                logger.info(f"User {user_id} DB language updated to {new_lang}")
-
-                context.user_data["lang"] = new_lang
-                logger.info(f"User {user_id} context language updated to {new_lang}")
-
-                new_lang_data = LANGUAGES.get(new_lang, LANGUAGES['en'])
-                language_set_answer = new_lang_data.get("language_set_answer", "Language set!")
-                await query.answer(language_set_answer.format(lang=new_lang.upper()))
-
-                logger.info(f"Rebuilding start menu in {new_lang} for user {user_id}")
-                start_menu_text, start_menu_markup = _build_start_menu_content(user_id, username, new_lang_data, context)
-                await query.edit_message_text(start_menu_text, reply_markup=start_menu_markup, parse_mode=None)
-                logger.info(f"Successfully edited message to show start menu in {new_lang}")
-
-            except sqlite3.Error as e:
-                logger.error(f"DB error updating language user {user_id}: {e}");
-                if conn and conn.in_transaction: conn.rollback()
-                error_saving_lang = current_lang_data.get("error_saving_language", "Error saving.")
-                await query.answer(error_saving_lang, show_alert=True)
-                await _display_language_menu(update, context, current_lang, current_lang_data)
-            except Exception as e:
-                logger.error(f"Unexpected error in language selection update for user {user_id}: {e}", exc_info=True)
-                await query.answer("An error occurred.", show_alert=True)
-                await _display_language_menu(update, context, current_lang, current_lang_data)
-            finally:
-                if conn: conn.close()
-        else:
-             invalid_lang_answer = current_lang_data.get("invalid_language_answer", "Invalid language.")
-             await query.answer(invalid_lang_answer, show_alert=True)
-    else:
-        await _display_language_menu(update, context, current_lang, current_lang_data)
-
-# (_display_language_menu helper unchanged)
-async def _display_language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, current_lang: str, current_lang_data: dict):
-     """Helper function to display the language selection keyboard."""
-     query = update.callback_query
-     keyboard = []
-     for lang_code, lang_dict_for_name in LANGUAGES.items():
-         lang_name = lang_dict_for_name.get("native_name", lang_code.upper())
-         keyboard.append([InlineKeyboardButton(f"{lang_name} {'✅' if lang_code == current_lang else ''}", callback_data=f"language|{lang_code}")])
-     back_button_text = current_lang_data.get("back_button", "Back")
-     keyboard.append([InlineKeyboardButton(f"{EMOJI_BACK} {back_button_text}", callback_data="back_start")])
-     lang_select_prompt = current_lang_data.get("language", "🌐 Select Language:")
-     try:
-        if query and query.message:
-            await query.edit_message_text(lang_select_prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-        else:
-             await send_message_with_retry(context.bot, update.effective_chat.id, lang_select_prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-     except Exception as e:
-         logger.error(f"Error displaying language menu: {e}")
-         try:
-             await send_message_with_retry(context.bot, update.effective_chat.id, lang_select_prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-         except Exception as send_e:
-             logger.error(f"Failed to send language menu after edit error: {send_e}")
-
-
-# --- Price List ---
-# (handle_price_list unchanged)
-async def handle_price_list(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    query = update.callback_query
-    lang, lang_data = _get_lang_data(context)
-
-    if not CITIES: no_cities_msg = lang_data.get("no_cities_for_prices", "No cities available."); keyboard = [[InlineKeyboardButton(f"{EMOJI_HOME} {lang_data.get('home_button', 'Home')}", callback_data="back_start")]]; await query.edit_message_text(f"{EMOJI_CITY} {no_cities_msg}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None); return
-
-    sorted_city_ids = sorted(CITIES.keys(), key=lambda city_id: CITIES.get(city_id, ''))
-    home_button_text = lang_data.get("home_button", "Home")
-    keyboard = [[InlineKeyboardButton(f"{EMOJI_CITY} {CITIES.get(c, 'N/A')}", callback_data=f"price_list_city|{c}")] for c in sorted_city_ids if CITIES.get(c)]
-    keyboard.append([InlineKeyboardButton(f"{EMOJI_HOME} {home_button_text}", callback_data="back_start")])
-    price_list_title = lang_data.get("price_list_title", "Price List"); select_city_prompt = lang_data.get("select_city_prices_prompt", "Select a city:")
-    await query.edit_message_text(f"{EMOJI_PRICELIST} {price_list_title}\n\n{select_city_prompt}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-# (handle_price_list_city unchanged)
-async def handle_price_list_city(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    query = update.callback_query
-    lang, lang_data = _get_lang_data(context)
-    if not params: logger.warning("handle_price_list_city no city_id."); await query.answer("Error: City ID missing.", show_alert=True); return
-
-    city_id = params[0]; city_name = CITIES.get(city_id)
-    if not city_name: error_city_not_found = lang_data.get("error_city_not_found", "Error: City not found."); await query.edit_message_text(f"❌ {error_city_not_found}", parse_mode=None); return await handle_price_list(update, context)
-
-    price_list_title_city_template = lang_data.get("price_list_title_city", "Price List: {city_name}"); msg = f"{EMOJI_PRICELIST} {price_list_title_city_template.format(city_name=city_name)}\n\n"
-    found_products = False; conn = None
-
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT product_type, size, price, district, COUNT(*) as quantity FROM products WHERE city = ? AND available > reserved GROUP BY product_type, size, price, district ORDER BY product_type, price, size, district", (city_name,))
-        results = c.fetchall()
-        no_products_in_city = lang_data.get("no_products_in_city", "No products available here."); available_label = lang_data.get("available_label", "available")
-
-        if not results: msg += no_products_in_city
-        else:
-            found_products = True
-            grouped_data = defaultdict(lambda: defaultdict(list))
-            for row in results: price_size_key = (Decimal(str(row['price'])), row['size']); grouped_data[row['product_type']][price_size_key].append((row['district'], row['quantity']))
-
-            for p_type in sorted(grouped_data.keys()):
-                type_data = grouped_data[p_type]; sorted_price_size = sorted(type_data.keys(), key=lambda x: (x[0], x[1]))
-                prod_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
-                for price, size in sorted_price_size:
-                    districts_list = type_data[(price, size)]; price_str = format_currency(price)
-                    msg += f"\n{prod_emoji} {p_type} {size} ({price_str}€)\n"
-                    districts_list.sort(key=lambda x: x[0])
-                    for district, quantity in districts_list: msg += f"  • {EMOJI_DISTRICT} {district}: {quantity} {available_label}\n"
-
-        back_city_list_button = lang_data.get("back_city_list_button", "Back to City List"); home_button = lang_data.get("home_button", "Home")
-        keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_city_list_button}", callback_data="price_list"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
-
-        try:
-            if len(msg) > 4000: truncated_note = lang_data.get("message_truncated_note", "Message truncated."); msg = msg[:4000] + f"\n\n✂️ ... {truncated_note}"; logger.warning(f"Price list message truncated {city_name}.")
-            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-        except telegram_error.BadRequest as e:
-             if "message is not modified" not in str(e).lower():
-                 logger.error(f"Error editing price list: {e}. Snippet: {msg[:200]}")
-                 error_displaying_prices = lang_data.get("error_displaying_prices", "Error displaying prices.")
-                 await query.answer(error_displaying_prices, show_alert=True)
-             else:
-                 await query.answer()
-
-    except sqlite3.Error as e:
-        logger.error(f"DB error fetching price list city {city_name}: {e}", exc_info=True)
-        error_loading_prices_db_template = lang_data.get("error_loading_prices_db", "Error: DB Load Error {city_name}")
-        await query.edit_message_text(f"❌ {error_loading_prices_db_template.format(city_name=city_name)}", parse_mode=None)
-    except Exception as e:
-        logger.error(f"Unexpected error price list city {city_name}: {e}", exc_info=True)
-        error_unexpected_prices = lang_data.get("error_unexpected_prices", "Error: Unexpected issue.")
-        await query.edit_message_text(f"❌ {error_unexpected_prices}", parse_mode=None)
-    finally:
-         if conn: conn.close()
-
-
-# --- Review Handlers ---
-# (handle_reviews_menu, handle_leave_review, handle_leave_review_message, handle_view_reviews, handle_leave_review_now unchanged)
-async def handle_reviews_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    query = update.callback_query
-    lang, lang_data = _get_lang_data(context)
-    review_prompt = lang_data.get("reviews", "📝 Reviews Menu")
-    view_reviews_button = lang_data.get("view_reviews_button", "View Reviews")
-    leave_review_button = lang_data.get("leave_review_button", "Leave a Review")
-    home_button = lang_data.get("home_button", "Home")
-    keyboard = [
-        [InlineKeyboardButton(f"👀 {view_reviews_button}", callback_data="view_reviews|0")],
-        [InlineKeyboardButton(f"✍️ {leave_review_button}", callback_data="leave_review")],
-        [InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(review_prompt, reply_markup=reply_markup, parse_mode=None)
-
-
-async def handle_leave_review(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    query = update.callback_query
-    lang, lang_data = _get_lang_data(context)
-    context.user_data["state"] = "awaiting_review"
-    enter_review_prompt = lang_data.get("enter_review_prompt", "Please type your review message and send it."); cancel_button_text = lang_data.get("cancel_button", "Cancel"); prompt_msg = f"✍️ {enter_review_prompt}"
-    keyboard = [[InlineKeyboardButton(f"❌ {cancel_button_text}", callback_data="reviews")]]
-    try:
-        await query.edit_message_text(prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-        enter_review_answer = lang_data.get("enter_review_answer", "Enter your review in the chat.")
-        await query.answer(enter_review_answer)
-    except telegram_error.BadRequest as e:
-        if "message is not modified" not in str(e).lower(): logger.error(f"Error editing leave review prompt: {e}"); await send_message_with_retry(context.bot, update.effective_chat.id, prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None); await query.answer()
-        else: await query.answer()
-    except Exception as e: logger.error(f"Unexpected error handle_leave_review: {e}", exc_info=True); await query.answer("Error occurred.", show_alert=True)
-
-
-async def handle_leave_review_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    state = context.user_data.get("state")
-    lang, lang_data = _get_lang_data(context)
-
-    if state != "awaiting_review": return
-
-    send_text_review_please = lang_data.get("send_text_review_please", "Please send text only for your review.")
-    review_not_empty = lang_data.get("review_not_empty", "Review cannot be empty. Please try again or cancel.")
-    review_too_long = lang_data.get("review_too_long", "Review is too long (max 1000 characters). Please shorten it.")
-    review_thanks = lang_data.get("review_thanks", "Thank you for your review! Your feedback helps us improve.")
-    error_saving_review_db = lang_data.get("error_saving_review_db", "Error: Could not save your review due to a database issue.")
-    error_saving_review_unexpected = lang_data.get("error_saving_review_unexpected", "Error: An unexpected issue occurred while saving your review.")
-    view_reviews_button = lang_data.get("view_reviews_button", "View Reviews")
-    home_button = lang_data.get("home_button", "Home")
-
-    if not update.message or not update.message.text:
-        await send_message_with_retry(context.bot, chat_id, send_text_review_please, parse_mode=None)
-        return
-
-    review_text = update.message.text.strip()
-    if not review_text:
-        await send_message_with_retry(context.bot, chat_id, review_not_empty, parse_mode=None)
-        return
-
-    if len(review_text) > 1000:
-         await send_message_with_retry(context.bot, chat_id, review_too_long, parse_mode=None)
-         return
-
-    conn = None
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute(
-            "INSERT INTO reviews (user_id, review_text, review_date) VALUES (?, ?, ?)",
-            (user_id, review_text, datetime.now(timezone.utc).isoformat())
-        )
-        conn.commit()
-        logger.info(f"User {user_id} left a review.")
-        context.user_data.pop("state", None)
-
-        success_msg = f"✅ {review_thanks}"
-        keyboard = [[InlineKeyboardButton(f"👀 {view_reviews_button}", callback_data="view_reviews|0"),
-                     InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
-        await send_message_with_retry(context.bot, chat_id, success_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-    except sqlite3.Error as e:
-        logger.error(f"DB error saving review user {user_id}: {e}", exc_info=True)
-        if conn and conn.in_transaction: conn.rollback()
-        context.user_data.pop("state", None)
-        await send_message_with_retry(context.bot, chat_id, f"❌ {error_saving_review_db}", parse_mode=None)
-
-    except Exception as e:
-        logger.error(f"Unexpected error saving review user {user_id}: {e}", exc_info=True)
-        if conn and conn.in_transaction: conn.rollback()
-        context.user_data.pop("state", None)
-        await send_message_with_retry(context.bot, chat_id, f"❌ {error_saving_review_unexpected}", parse_mode=None)
-
-    finally:
-        if conn: conn.close()
-
-async def handle_view_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    query = update.callback_query
-    lang, lang_data = _get_lang_data(context)
-    offset = 0; reviews_per_page = 5
-    if params and len(params) > 0 and params[0].isdigit(): offset = int(params[0])
-    reviews_data = fetch_reviews(offset=offset, limit=reviews_per_page + 1)
-    user_reviews_title = lang_data.get("user_reviews_title", "User Reviews"); no_reviews_yet = lang_data.get("no_reviews_yet", "No reviews yet."); no_more_reviews = lang_data.get("no_more_reviews", "No more reviews."); prev_button = lang_data.get("prev_button", "Prev"); next_button = lang_data.get("next_button", "Next"); back_review_menu_button = lang_data.get("back_review_menu_button", "Back to Reviews"); unknown_date_label = lang_data.get("unknown_date_label", "Unknown Date"); error_displaying_review = lang_data.get("error_displaying_review", "Error display"); error_updating_review_list = lang_data.get("error_updating_review_list", "Error updating list.")
-    msg = f"{EMOJI_REVIEW} {user_reviews_title}\n\n"; keyboard = []
-    if not reviews_data:
-        if offset == 0: msg += no_reviews_yet; keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_review_menu_button}", callback_data="reviews")]]
-        else: msg += no_more_reviews; keyboard = [[InlineKeyboardButton(f"⬅️ {prev_button}", callback_data=f"view_reviews|{max(0, offset - reviews_per_page)}")], [InlineKeyboardButton(f"{EMOJI_BACK} {back_review_menu_button}", callback_data="reviews")]]
-    else:
-        has_more = len(reviews_data) > reviews_per_page; reviews_to_show = reviews_data[:reviews_per_page]
-        for review in reviews_to_show:
-            try:
-                date_str = review.get('review_date', '')
-                formatted_date = unknown_date_label
-                if date_str:
-                    try: formatted_date = datetime.fromisoformat(date_str.replace('Z', '+00:00')).strftime("%Y-%m-%d")
-                    except ValueError: pass
-                username = review.get('username', 'anonymous'); username_display = f"@{username}" if username and username != 'anonymous' else username
-                review_text = review.get('review_text', ''); msg += f"{EMOJI_PROFILE} {username_display} ({formatted_date}):\n{review_text}\n\n"
-            except Exception as e: logger.error(f"Error formatting review: {review}, Error: {e}"); msg += f"({error_displaying_review})\n\n"
-        nav_buttons = []
-        if offset > 0: nav_buttons.append(InlineKeyboardButton(f"⬅️ {prev_button}", callback_data=f"view_reviews|{max(0, offset - reviews_per_page)}"))
-        if has_more: nav_buttons.append(InlineKeyboardButton(f"➡️ {next_button}", callback_data=f"view_reviews|{offset + reviews_per_page}"))
-        if nav_buttons: keyboard.append(nav_buttons)
-        keyboard.append([InlineKeyboardButton(f"{EMOJI_BACK} {back_review_menu_button}", callback_data="reviews")])
-    try: await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-    except telegram_error.BadRequest as e:
-        if "message is not modified" not in str(e).lower(): logger.warning(f"Failed edit view_reviews: {e}"); await query.answer(error_updating_review_list, show_alert=True)
-        else: await query.answer()
-
-async def handle_leave_review_now(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Callback handler specifically for the 'Leave Review Now' button after purchase."""
-    await handle_leave_review(update, context, params)
-
-# --- Refill Handlers ---
-# (handle_refill unchanged)
-async def handle_refill(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+# --- Confirm Pay Handler (Modified for Insufficient Balance) ---
+async def handle_confirm_pay(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Handles the 'Pay Now' button press from the basket."""
     query = update.callback_query
     user_id = query.from_user.id
     chat_id = query.message.chat_id
     lang, lang_data = _get_lang_data(context)
 
-    if not NOWPAYMENTS_API_KEY:
-        crypto_disabled_msg = lang_data.get("crypto_payment_disabled", "Top Up is currently disabled.")
-        await query.answer(crypto_disabled_msg, show_alert=True)
-        logger.warning(f"User {user_id} tried to refill, but NOWPAYMENTS_API_KEY is not set.")
+    clear_expired_basket(context, user_id) # Sync call
+    basket = context.user_data.get("basket", [])
+    applied_discount_info = context.user_data.get('applied_discount')
+
+    if not basket:
+        await query.answer("Your basket is empty!", show_alert=True)
+        await handle_view_basket(update, context) # Use await
         return
 
-    context.user_data['state'] = 'awaiting_refill_amount'
-    logger.info(f"User {user_id} initiated refill process. State -> awaiting_refill_amount.")
+    # --- Variables to store results ---
+    conn = None
+    original_total = Decimal('0.0')
+    final_total = Decimal('0.0')
+    valid_basket_items_snapshot = []
+    discount_code_to_use = None
+    user_balance = Decimal('0.0')
+    error_occurred = False # Flag
 
-    top_up_title = lang_data.get("top_up_title", "Top Up Balance")
-    enter_refill_amount_prompt = lang_data.get("enter_refill_amount_prompt", "Please reply with the amount in EUR you wish to add (e.g., 10 or 25.50).")
-    min_top_up_note_template = lang_data.get("min_top_up_note", "Minimum top up: {amount} EUR")
-    cancel_button_text = lang_data.get("cancel_button", "Cancel")
-    enter_amount_answer = lang_data.get("enter_amount_answer", "Enter the top-up amount.")
-
-    min_amount_str = format_currency(MIN_DEPOSIT_EUR)
-    min_top_up_note = min_top_up_note_template.format(amount=min_amount_str)
-    prompt_msg = (f"{EMOJI_REFILL} {top_up_title}\n\n{enter_refill_amount_prompt}\n\n{min_top_up_note}")
-    keyboard = [[InlineKeyboardButton(f"❌ {cancel_button_text}", callback_data="profile")]]
-
+    # --- Fetch data and calculate ---
     try:
-        await query.edit_message_text(prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-        await query.answer(enter_amount_answer)
-    except telegram_error.BadRequest as e:
-        if "message is not modified" not in str(e).lower(): logger.error(f"Error editing refill prompt: {e}"); await send_message_with_retry(context.bot, chat_id, prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None); await query.answer()
-        else: await query.answer(enter_amount_answer)
-    except Exception as e: logger.error(f"Unexpected error handle_refill: {e}", exc_info=True); error_occurred_answer = lang_data.get("error_occurred_answer", "An error occurred."); await query.answer(error_occurred_answer, show_alert=True)
+        conn = get_db_connection()
+        c = conn.cursor()
 
-# (handle_refill_amount_message unchanged)
-async def handle_refill_amount_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        product_ids_in_basket = list(set(item['product_id'] for item in basket))
+        if not product_ids_in_basket:
+             await query.answer("Basket empty after validation.", show_alert=True)
+             await handle_view_basket(update, context) # Use await
+             return
+
+        placeholders = ','.join('?' for _ in product_ids_in_basket)
+        # Fetch necessary details for snapshot
+        c.execute(f"SELECT id, price, name, size, product_type FROM products WHERE id IN ({placeholders})", product_ids_in_basket)
+        prices_dict = {row['id']: dict(row) for row in c.fetchall()} # Store full dict
+
+        for item in basket:
+             prod_id = item['product_id']
+             if prod_id in prices_dict:
+                 db_price = Decimal(str(prices_dict[prod_id]['price']))
+                 original_total += db_price
+                 # Create snapshot with necessary info for later processing
+                 item_snapshot = {
+                     "product_id": prod_id,
+                     "price": float(db_price), # Store as float for JSON later
+                     "name": prices_dict[prod_id]['name'],
+                     "size": prices_dict[prod_id]['size'],
+                     "product_type": prices_dict[prod_id]['product_type']
+                     # timestamp is not needed in snapshot for final processing
+                 }
+                 valid_basket_items_snapshot.append(item_snapshot)
+             else: logger.warning(f"Product {prod_id} missing during payment confirm user {user_id}.")
+
+        if not valid_basket_items_snapshot:
+             context.user_data['basket'] = []
+             context.user_data.pop('applied_discount', None)
+             logger.warning(f"All items unavailable user {user_id} payment confirm.")
+             keyboard_back = [[InlineKeyboardButton("⬅️ Back", callback_data="view_basket")]]
+             try: await query.edit_message_text("❌ Error: All items unavailable.", reply_markup=InlineKeyboardMarkup(keyboard_back), parse_mode=None)
+             except telegram_error.BadRequest: await send_message_with_retry(context.bot, chat_id, "❌ Error: All items unavailable.", reply_markup=InlineKeyboardMarkup(keyboard_back), parse_mode=None)
+             return
+
+        final_total = original_total
+        if applied_discount_info:
+            code_valid, _, discount_details = validate_discount_code(applied_discount_info['code'], float(original_total))
+            if code_valid and discount_details:
+                final_total = Decimal(str(discount_details['final_total']))
+                discount_code_to_use = applied_discount_info.get('code')
+                context.user_data['applied_discount']['final_total'] = float(final_total)
+                context.user_data['applied_discount']['amount'] = discount_details['discount_amount']
+            else:
+                final_total = original_total
+                discount_code_to_use = None
+                context.user_data.pop('applied_discount', None)
+                await query.answer("Applied discount became invalid.", show_alert=True)
+
+        if final_total < Decimal('0.0'):
+             await query.answer("Cannot process negative amount.", show_alert=True)
+             return
+
+        c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+        balance_result = c.fetchone()
+        user_balance = Decimal(str(balance_result['balance'])) if balance_result else Decimal('0.0')
+
+    except (sqlite3.Error, Exception) as e: # Catch potential errors here
+        logger.error(f"Error during payment confirm data processing user {user_id}: {e}", exc_info=True)
+        error_occurred = True # Set flag
+        kb = [[InlineKeyboardButton("⬅️ Back", callback_data="view_basket")]]
+        try: await query.edit_message_text("❌ Error preparing payment.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=None)
+        except Exception as edit_err: logger.error(f"Failed to edit message in error handler: {edit_err}")
+    finally:
+        if conn:
+            conn.close() # Ensure connection is closed
+            logger.debug("DB connection closed in handle_confirm_pay.")
+
+    # --- Proceed only if no error occurred during data processing ---
+    if error_occurred:
+        return # Stop execution if an error happened
+
+    # --- Balance Comparison and Action Logic ---
+    logger.info(f"Payment confirm user {user_id}. Final Total: {final_total:.2f}, Balance: {user_balance:.2f}. Basket: {valid_basket_items_snapshot}")
+
+    if user_balance >= final_total:
+        # Pay with balance (Existing Logic - Calls helper which handles finalization)
+        logger.info(f"Sufficient balance user {user_id}. Processing with balance.")
+        try:
+            if query.message: await query.edit_message_text("⏳ Processing payment with balance...", reply_markup=None, parse_mode=None)
+            else: await send_message_with_retry(context.bot, chat_id, "⏳ Processing payment with balance...", parse_mode=None)
+        except telegram_error.BadRequest: await query.answer("Processing...")
+
+        # Pass the *snapshot* created earlier
+        success = await payment.process_purchase_with_balance(user_id, final_total, valid_basket_items_snapshot, discount_code_to_use, context)
+
+        if success:
+            try:
+                 if query.message: await query.edit_message_text("✅ Purchase successful! Details sent.", reply_markup=None, parse_mode=None)
+            except telegram_error.BadRequest: pass # Ignore edit error after success
+        # else: Failure message handled within process_purchase_with_balance
+
+    else:
+        # --- INSUFFICIENT BALANCE - NEW FLOW ---
+        logger.info(f"Insufficient balance user {user_id}. Prompting for discount/crypto.")
+
+        # Store necessary info for the next steps
+        context.user_data['basket_pay_snapshot'] = valid_basket_items_snapshot
+        context.user_data['basket_pay_total_eur'] = float(final_total)
+        context.user_data['basket_pay_discount_code'] = discount_code_to_use # May be None
+
+        needed_amount_str = format_currency(final_total)
+        balance_str = format_currency(user_balance)
+
+        insufficient_msg_template = lang_data.get("insufficient_balance_pay_option", "⚠️ Insufficient Balance! ({balance} / {required} EUR)")
+        prompt_discount_msg = lang_data.get("prompt_discount_or_pay", "Do you have a discount code to apply before paying with crypto?")
+        pay_crypto_button_text = lang_data.get("pay_crypto_button", "💳 Pay with Crypto")
+        apply_discount_button_text = lang_data.get("apply_discount_pay_button", "🏷️ Apply Discount Code")
+        back_basket_button_text = lang_data.get("back_basket_button", "Back to Basket")
+
+        full_msg = (f"{insufficient_msg_template.format(balance=balance_str, required=needed_amount_str)}\n\n"
+                   f"{prompt_discount_msg}")
+
+        keyboard = [
+            # Callback triggers asking for discount code
+            [InlineKeyboardButton(apply_discount_button_text, callback_data="apply_discount_basket_pay")],
+            # Callback skips discount and goes straight to crypto choice
+            [InlineKeyboardButton(pay_crypto_button_text, callback_data="skip_discount_basket_pay")],
+            [InlineKeyboardButton(f"⬅️ {back_basket_button_text}", callback_data="view_basket")]
+        ]
+        try:
+            await query.edit_message_text(full_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        except telegram_error.BadRequest:
+            await send_message_with_retry(context.bot, chat_id, full_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        await query.answer() # Acknowledge button press
+
+# --- NEW: Handler to Ask for Discount Code in Basket Pay Flow ---
+async def handle_apply_discount_basket_pay(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    user_id = query.from_user.id
+    lang, lang_data = _get_lang_data(context)
+
+    # Check if context for this flow exists
+    if 'basket_pay_snapshot' not in context.user_data or 'basket_pay_total_eur' not in context.user_data:
+        logger.error(f"User {user_id} clicked apply_discount_basket_pay but context is missing.")
+        await query.answer("Error: Context lost. Please go back to basket.", show_alert=True)
+        return await handle_view_basket(update, context) # Go back to basket
+
+    context.user_data['state'] = 'awaiting_basket_discount_code' # New state
+    prompt_msg = lang_data.get("basket_pay_enter_discount", "Please enter discount code for this purchase:")
+    cancel_button_text = lang_data.get("cancel_button", "Cancel")
+    # Cancel goes back to the discount/pay choice prompt
+    keyboard = [[InlineKeyboardButton(f"❌ {cancel_button_text}", callback_data="confirm_pay")]] # Re-trigger confirm_pay to show options again
+
+    await query.edit_message_text(prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    await query.answer("Enter discount code in chat.")
+
+# --- NEW: Message Handler for Basket Pay Discount Code ---
+async def handle_basket_discount_code_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     state = context.user_data.get("state")
     lang, lang_data = _get_lang_data(context)
 
-    if state != "awaiting_refill_amount": logger.debug(f"Ignore msg user {user_id}, state: {state}"); return
+    if state != "awaiting_basket_discount_code": return
+    if not update.message or not update.message.text: return
 
-    send_amount_as_text = lang_data.get("send_amount_as_text", "Send amount as text (e.g., 10).")
-    amount_too_low_msg_template = lang_data.get("amount_too_low_msg", "Amount too low. Min: {amount} EUR.")
-    amount_too_high_msg = lang_data.get("amount_too_high_msg", "Amount too high. Max: 10000 EUR.")
-    invalid_amount_format_msg = lang_data.get("invalid_amount_format_msg", "Invalid amount format (e.g., 10.50).")
-    unexpected_error_msg = lang_data.get("unexpected_error_msg", "Unexpected error. Try again.")
-    choose_crypto_prompt_template = lang_data.get("choose_crypto_prompt", "Top up {amount} EUR. Choose crypto:")
-    cancel_top_up_button = lang_data.get("cancel_top_up_button", "Cancel Top Up")
+    entered_code = update.message.text.strip()
+    context.user_data.pop('state', None) # Clear state after getting code
 
-    if not update.message or not update.message.text:
-        await send_message_with_retry(context.bot, chat_id, f"❌ {send_amount_as_text}", parse_mode=None)
+    # Retrieve original total needed for validation
+    basket_snapshot = context.user_data.get('basket_pay_snapshot')
+    if not basket_snapshot:
+        logger.error(f"User {user_id} sent basket discount code but snapshot context is missing.")
+        await send_message_with_retry(context.bot, chat_id, "Error: Context lost. Returning to basket.", parse_mode=None)
+        return await handle_view_basket(update, context)
+
+    # Calculate original total from snapshot
+    original_total_float = sum(item.get('price', 0.0) for item in basket_snapshot)
+
+    if not entered_code:
+        await send_message_with_retry(context.bot, chat_id, lang_data.get("no_code_entered", "No code entered."), parse_mode=None)
+        # Re-show crypto choices without discount
+        await _show_crypto_choices_for_basket(update, context)
         return
 
-    amount_text = update.message.text.strip().replace(',', '.')
+    code_valid, validation_message, discount_details = validate_discount_code(entered_code, original_total_float)
 
+    feedback_msg_template = ""
+    if code_valid and discount_details:
+        new_final_total = discount_details['final_total']
+        context.user_data['basket_pay_total_eur'] = new_final_total # Update the total to pay
+        context.user_data['basket_pay_discount_code'] = entered_code # Store the code used
+        logger.info(f"User {user_id} applied valid basket discount '{entered_code}'. New total: {new_final_total:.2f} EUR")
+        feedback_msg_template = lang_data.get("basket_pay_code_applied", "✅ Code '{code}' applied. New total: {total} EUR. Choose crypto:")
+        feedback_msg = feedback_msg_template.format(code=entered_code, total=format_currency(new_final_total))
+    else:
+        # Keep original total, don't store discount code
+        context.user_data['basket_pay_discount_code'] = None
+        logger.warning(f"User {user_id} entered invalid basket discount '{entered_code}': {validation_message}")
+        original_total_eur = context.user_data.get('basket_pay_total_eur', 0.0) # Get potentially pre-discount total back
+        feedback_msg_template = lang_data.get("basket_pay_code_invalid", "❌ Code invalid: {reason}. Choose crypto to pay {total} EUR:")
+        feedback_msg = feedback_msg_template.format(reason=validation_message, total=format_currency(original_total_eur))
+
+    # Delete the user's message containing the code
     try:
-        refill_amount_decimal = Decimal(amount_text)
-        if refill_amount_decimal < MIN_DEPOSIT_EUR:
-            min_amount_str = format_currency(MIN_DEPOSIT_EUR)
-            amount_too_low_msg = amount_too_low_msg_template.format(amount=min_amount_str)
-            await send_message_with_retry(context.bot, chat_id, f"❌ {amount_too_low_msg}", parse_mode=None)
-            return
-        if refill_amount_decimal > Decimal('10000.00'):
-            await send_message_with_retry(context.bot, chat_id, f"❌ {amount_too_high_msg}", parse_mode=None)
-            return
-
-        context.user_data['refill_eur_amount'] = float(refill_amount_decimal)
-        context.user_data['state'] = 'awaiting_refill_crypto_choice'
-        logger.info(f"User {user_id} entered refill EUR: {refill_amount_decimal:.2f}. State -> awaiting_refill_crypto_choice")
-
-        supported_currencies = {
-            'BTC': 'btc', 'LTC': 'ltc', 'ETH': 'eth', 'SOL': 'sol',
-            'USDT': 'usdt', 'USDC': 'usdc', 'TON': 'ton'
-        }
-        asset_buttons = []
-        row = []
-        for display, code in supported_currencies.items():
-            row.append(InlineKeyboardButton(display, callback_data=f"select_refill_crypto|{code}"))
-            if len(row) >= 3:
-                asset_buttons.append(row)
-                row = []
-        if row:
-            asset_buttons.append(row)
-        asset_buttons.append([InlineKeyboardButton(f"❌ {cancel_top_up_button}", callback_data="profile")])
-
-        refill_amount_str = format_currency(refill_amount_decimal)
-        choose_crypto_msg = choose_crypto_prompt_template.format(amount=refill_amount_str)
-
-        await send_message_with_retry(context.bot, chat_id, choose_crypto_msg, reply_markup=InlineKeyboardMarkup(asset_buttons), parse_mode=None)
-
-    except ValueError:
-        await send_message_with_retry(context.bot, chat_id, f"❌ {invalid_amount_format_msg}", parse_mode=None)
-        return
+        await context.bot.delete_message(chat_id=chat_id, message_id=update.message.message_id)
     except Exception as e:
-        logger.error(f"Error processing refill amount user {user_id}: {e}", exc_info=True)
-        await send_message_with_retry(context.bot, chat_id, f"❌ {unexpected_error_msg}", parse_mode=None)
-        context.user_data.pop('state', None)
-        context.user_data.pop('refill_eur_amount', None)
+        logger.warning(f"Could not delete user's discount code message: {e}")
+
+    # Send feedback and show crypto choices
+    await send_message_with_retry(context.bot, chat_id, feedback_msg, parse_mode=None)
+    await _show_crypto_choices_for_basket(update, context)
+
+# --- NEW: Handler to Skip Discount in Basket Pay Flow ---
+async def handle_skip_discount_basket_pay(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    # Check if context for this flow exists
+    if 'basket_pay_snapshot' not in context.user_data or 'basket_pay_total_eur' not in context.user_data:
+        logger.error(f"User {user_id} clicked skip_discount_basket_pay but context is missing.")
+        await query.answer("Error: Context lost. Please go back to basket.", show_alert=True)
+        return await handle_view_basket(update, context) # Go back to basket
+
+    context.user_data['basket_pay_discount_code'] = None # Ensure no discount code is stored
+    await query.answer("Skipping discount...")
+    # Edit the previous message to show crypto choices
+    await _show_crypto_choices_for_basket(update, context, edit_message=True)
+
+
+# --- NEW: Helper to Show Crypto Choices for Basket Payment ---
+async def _show_crypto_choices_for_basket(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
+    """Displays cryptocurrency selection buttons for the basket total."""
+    query = update.callback_query # May be None if called from message handler
+    chat_id = update.effective_chat.id
+    lang, lang_data = _get_lang_data(context)
+
+    # Get stored total
+    total_eur_float = context.user_data.get('basket_pay_total_eur')
+    if total_eur_float is None:
+        logger.error("Cannot show crypto choices for basket: total EUR missing from context.")
+        msg = "Error: Payment amount missing. Returning to basket."
+        kb = [[InlineKeyboardButton("⬅️ Back", callback_data="view_basket")]]
+        if query and edit_message: await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+        else: await send_message_with_retry(context.bot, chat_id, msg, reply_markup=InlineKeyboardMarkup(kb))
+        if query: await query.answer("Error: Amount missing.", show_alert=True)
+        return
+
+    # Use same currencies as refill
+    supported_currencies = {
+        'BTC': 'btc', 'LTC': 'ltc', 'ETH': 'eth', 'SOL': 'sol',
+        'USDT': 'usdt', 'USDC': 'usdc', 'TON': 'ton'
+    }
+    asset_buttons = []
+    row = []
+    for display, code in supported_currencies.items():
+        # NEW Callback Data for basket payment crypto selection
+        row.append(InlineKeyboardButton(display, callback_data=f"select_basket_crypto|{code}"))
+        if len(row) >= 3:
+            asset_buttons.append(row)
+            row = []
+    if row:
+        asset_buttons.append(row)
+
+    cancel_button_text = lang_data.get("cancel_button", "Cancel")
+    asset_buttons.append([InlineKeyboardButton(f"❌ {cancel_button_text}", callback_data="view_basket")]) # Cancel returns to basket
+
+    amount_str = format_currency(total_eur_float)
+    prompt_template = lang_data.get("choose_crypto_for_purchase", "Choose crypto to pay {amount} EUR for your basket:")
+    prompt_msg = prompt_template.format(amount=amount_str)
+
+    if query and edit_message:
+        try:
+            await query.edit_message_text(prompt_msg, reply_markup=InlineKeyboardMarkup(asset_buttons), parse_mode=None)
+        except telegram_error.BadRequest as e:
+            if "message is not modified" not in str(e).lower():
+                 logger.error(f"Error editing message for crypto choice (basket): {e}")
+                 # Send as new message if edit fails
+                 await send_message_with_retry(context.bot, chat_id, prompt_msg, reply_markup=InlineKeyboardMarkup(asset_buttons), parse_mode=None)
+            elif query: await query.answer() # Acknowledge if not modified
+    else:
+        # Send as a new message if not editing (e.g., after discount code message)
+        await send_message_with_retry(context.bot, chat_id, prompt_msg, reply_markup=InlineKeyboardMarkup(asset_buttons), parse_mode=None)
 
 # --- END OF FILE user.py ---
