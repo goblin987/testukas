@@ -143,8 +143,8 @@ LANGUAGES = {
         "drop_unavailable": "Drop Unavailable! This option just sold out or was reserved by someone else.",
         "error_loading_details": "Error: Failed to Load Product Details",
         "back_options_button": "Back to Options",
-        "no_products_in_city_districts": "No products currently available in any district of this city.", # <<< ADDED
-        "error_loading_districts": "Error loading districts. Please try again.", # <<< ADDED
+        "no_products_in_city_districts": "No products currently available in any district of this city.",
+        "error_loading_districts": "Error loading districts. Please try again.",
 
         # --- Basket & Payment ---
         "added_to_basket": "✅ Item Reserved!\n\n{item} is in your basket for {timeout} minutes! ⏳",
@@ -163,7 +163,19 @@ LANGUAGES = {
         "basket_already_empty": "Basket is already empty.",
         "basket_cleared": "🗑️ Basket Cleared!",
         "pay": "💳 Total to Pay: {amount} EUR",
-        "insufficient_balance": "⚠️ Insufficient Balance!\n\nPlease top up to continue! 💸",
+        "insufficient_balance": "⚠️ Insufficient Balance!\n\nPlease top up to continue! 💸", # Keep generic one for /profile
+        "insufficient_balance_pay_option": "⚠️ Insufficient Balance! ({balance} / {required} EUR)", # <<< ADDED
+        "pay_crypto_button": "💳 Pay with Crypto", # <<< ADDED
+        "apply_discount_pay_button": "🏷️ Apply Discount Code", # <<< ADDED
+        "skip_discount_button": "⏩ Skip Discount", # <<< ADDED
+        "prompt_discount_or_pay": "Do you have a discount code to apply before paying with crypto?", # <<< ADDED
+        "basket_pay_enter_discount": "Please enter discount code for this purchase:", # <<< ADDED
+        "basket_pay_code_applied": "✅ Code '{code}' applied. New total: {total} EUR. Choose crypto:", # <<< ADDED
+        "basket_pay_code_invalid": "❌ Code invalid: {reason}. Choose crypto to pay {total} EUR:", # <<< ADDED
+        "choose_crypto_for_purchase": "Choose crypto to pay {amount} EUR for your basket:", # <<< ADDED
+        "crypto_purchase_success": "Payment Confirmed! Your purchase details are being sent.", # <<< ADDED
+        "crypto_purchase_failed": "Payment Failed/Expired. Your items are no longer reserved.", # <<< ADDED
+        "basket_pay_too_low": "Basket total {basket_total} EUR is below minimum for {currency}.", # <<< ADDED
         "balance_changed_error": "❌ Transaction failed: Your balance changed. Please check your balance and try again.",
         "order_failed_all_sold_out_balance": "❌ Order Failed: All items in your basket became unavailable during processing. Your balance was not charged.",
         "error_processing_purchase_contact_support": "❌ An error occurred while processing your purchase. Please contact support.",
@@ -295,7 +307,7 @@ LANGUAGES = {
         "admin_menu": "🔧 Admin Panel\n\nManage the bot from here:",
         "admin_select_city": "🏙️ Select City to Edit\n\nChoose a city:",
         "admin_select_district": "🏘️ Select District in {city}\n\nPick a district:",
-        "admin_select_type": "💎 Select Product Type\n\nChoose or create a type:", # Changed "Candy" to "Product"
+        "admin_select_type": "💎 Select Product Type\n\nChoose or create a type:",
         "admin_choose_action": "📦 Manage {type} in {city}, {district}\n\nWhat would you like to do?",
         "set_media_prompt_plain": "📸 Send a photo, video, or GIF to display above all messages:",
         "state_error": "❌ Error: Invalid State\n\nPlease start the 'Add New Product' process again from the Admin Panel.",
@@ -360,8 +372,20 @@ LANGUAGES = {
     "lt": {
         "native_name": "Lietuvių",
         # ... (keep existing translations) ...
-        "no_products_in_city_districts": "Šiuo metu šiame mieste nėra prekių jokiuose rajonuose.", # <<< ADDED
-        "error_loading_districts": "Klaida kraunant rajonus. Bandykite dar kartą.", # <<< ADDED
+        "no_products_in_city_districts": "Šiuo metu šiame mieste nėra prekių jokiuose rajonuose.",
+        "error_loading_districts": "Klaida kraunant rajonus. Bandykite dar kartą.",
+        "insufficient_balance_pay_option": "⚠️ Nepakankamas Likutis! ({balance} / {required} EUR)",
+        "pay_crypto_button": "💳 Mokėti Kriptovaliuta",
+        "apply_discount_pay_button": "🏷️ Panaudoti Nuolaidos Kodą",
+        "skip_discount_button": "⏩ Praleisti Nuolaidą",
+        "prompt_discount_or_pay": "Ar turite nuolaidos kodą, kurį norite panaudoti prieš mokant kriptovaliuta?",
+        "basket_pay_enter_discount": "Įveskite nuolaidos kodą šiam pirkiniui:",
+        "basket_pay_code_applied": "✅ Kodas '{code}' pritaikytas. Nauja suma: {total} EUR. Pasirinkite kriptovaliutą:",
+        "basket_pay_code_invalid": "❌ Kodas netinkamas: {reason}. Pasirinkite kriptovaliutą mokėti {total} EUR:",
+        "choose_crypto_for_purchase": "Pasirinkite kriptovaliutą sumokėti {amount} EUR už krepšelį:",
+        "crypto_purchase_success": "Mokėjimas Patvirtintas! Jūsų pirkimo informacija siunčiama.",
+        "crypto_purchase_failed": "Mokėjimas Nepavyko/Baigėsi. Jūsų prekės nebėra rezervuotos.",
+        "basket_pay_too_low": "Krepšelio suma {basket_total} EUR yra mažesnė nei minimali {currency}.",
         # --- NEW Broadcast Translations ---
         "broadcast_select_target": "📢 Masinė Žinutė\n\nPasirinkite gavėjų auditoriją:",
         "broadcast_target_all": "👥 Visi Vartotojai",
@@ -415,8 +439,20 @@ LANGUAGES = {
     "ru": {
         "native_name": "Русский",
         # ... (keep existing translations) ...
-        "no_products_in_city_districts": "В настоящее время в этом городе нет доступных товаров ни в одном районе.", # <<< ADDED
-        "error_loading_districts": "Ошибка загрузки районов. Пожалуйста, попробуйте еще раз.", # <<< ADDED
+        "no_products_in_city_districts": "В настоящее время в этом городе нет доступных товаров ни в одном районе.",
+        "error_loading_districts": "Ошибка загрузки районов. Пожалуйста, попробуйте еще раз.",
+        "insufficient_balance_pay_option": "⚠️ Недостаточно Средств! ({balance} / {required} EUR)",
+        "pay_crypto_button": "💳 Оплатить Криптовалютой",
+        "apply_discount_pay_button": "🏷️ Применить Промокод",
+        "skip_discount_button": "⏩ Пропустить Скидку",
+        "prompt_discount_or_pay": "У вас есть промокод для применения перед оплатой криптовалютой?",
+        "basket_pay_enter_discount": "Введите промокод для этой покупки:",
+        "basket_pay_code_applied": "✅ Код '{code}' применен. Новая сумма: {total} EUR. Выберите криптовалюту:",
+        "basket_pay_code_invalid": "❌ Код недействителен: {reason}. Выберите криптовалюту для оплаты {total} EUR:",
+        "choose_crypto_for_purchase": "Выберите криптовалюту для оплаты {amount} EUR за вашу корзину:",
+        "crypto_purchase_success": "Платеж Подтвержден! Информация о вашей покупке отправляется.",
+        "crypto_purchase_failed": "Платеж Неудачен/Истек. Ваши товары больше не зарезервированы.",
+        "basket_pay_too_low": "Сумма корзины {basket_total} EUR ниже минимума для {currency}.",
         # --- NEW Broadcast Translations ---
         "broadcast_select_target": "📢 Массовая Рассылка\n\nВыберите целевую аудиторию:",
         "broadcast_target_all": "👥 Все Пользователи",
@@ -587,13 +623,31 @@ def init_db():
                 target_eur_amount REAL NOT NULL,
                 expected_crypto_amount REAL NOT NULL,
                 created_at TEXT NOT NULL,
+                is_purchase INTEGER DEFAULT 0,       -- <<< ADDED (0=refill, 1=purchase)
+                basket_snapshot_json TEXT DEFAULT NULL, -- <<< ADDED (Store basket JSON)
+                discount_code_used TEXT DEFAULT NULL, -- <<< ADDED
                 FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )''')
+            # Add is_purchase column if it doesn't exist
             try:
-                c.execute("ALTER TABLE pending_deposits ADD COLUMN expected_crypto_amount REAL")
-                logger.info("Added 'expected_crypto_amount' column to pending_deposits table.")
+                c.execute("ALTER TABLE pending_deposits ADD COLUMN is_purchase INTEGER DEFAULT 0")
+                logger.info("Added 'is_purchase' column to pending_deposits table.")
             except sqlite3.OperationalError as alter_e:
-                 if "duplicate column name: expected_crypto_amount" in str(alter_e): pass
+                 if "duplicate column name: is_purchase" in str(alter_e): pass
+                 else: raise
+            # Add basket_snapshot_json column if it doesn't exist
+            try:
+                c.execute("ALTER TABLE pending_deposits ADD COLUMN basket_snapshot_json TEXT DEFAULT NULL")
+                logger.info("Added 'basket_snapshot_json' column to pending_deposits table.")
+            except sqlite3.OperationalError as alter_e:
+                 if "duplicate column name: basket_snapshot_json" in str(alter_e): pass
+                 else: raise
+            # Add discount_code_used column if it doesn't exist
+            try:
+                c.execute("ALTER TABLE pending_deposits ADD COLUMN discount_code_used TEXT DEFAULT NULL")
+                logger.info("Added 'discount_code_used' column to pending_deposits table.")
+            except sqlite3.OperationalError as alter_e:
+                 if "duplicate column name: discount_code_used" in str(alter_e): pass
                  else: raise
 
             # --- NEW: admin_log table ---
@@ -621,6 +675,8 @@ def init_db():
             c.execute("CREATE INDEX IF NOT EXISTS idx_pending_deposits_user_id ON pending_deposits(user_id)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_admin_log_timestamp ON admin_log(timestamp)") # Index for admin log
             c.execute("CREATE INDEX IF NOT EXISTS idx_users_banned ON users(is_banned)") # Index for banned status
+            c.execute("CREATE INDEX IF NOT EXISTS idx_pending_deposits_is_purchase ON pending_deposits(is_purchase)") # <<< ADDED INDEX
+
 
             conn.commit()
             logger.info(f"Database schema at {DATABASE_PATH} initialized/verified successfully.")
@@ -629,17 +685,26 @@ def init_db():
         raise SystemExit("Database initialization failed.")
 
 
-# --- Pending Deposit DB Helpers (Synchronous) ---
-def add_pending_deposit(payment_id: str, user_id: int, currency: str, target_eur_amount: float, expected_crypto_amount: float):
+# --- Pending Deposit DB Helpers (Synchronous - Modified) ---
+def add_pending_deposit(payment_id: str, user_id: int, currency: str, target_eur_amount: float, expected_crypto_amount: float, is_purchase: bool = False, basket_snapshot: list | None = None, discount_code: str | None = None):
+    basket_json = json.dumps(basket_snapshot) if basket_snapshot else None
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute("""
-                INSERT INTO pending_deposits (payment_id, user_id, currency, target_eur_amount, expected_crypto_amount, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (payment_id, user_id, currency.lower(), target_eur_amount, expected_crypto_amount, datetime.now(timezone.utc).isoformat()))
+                INSERT INTO pending_deposits (
+                    payment_id, user_id, currency, target_eur_amount,
+                    expected_crypto_amount, created_at, is_purchase,
+                    basket_snapshot_json, discount_code_used
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                payment_id, user_id, currency.lower(), target_eur_amount,
+                expected_crypto_amount, datetime.now(timezone.utc).isoformat(),
+                1 if is_purchase else 0, basket_json, discount_code
+                ))
             conn.commit()
-            logger.info(f"Added pending deposit {payment_id} for user {user_id} ({target_eur_amount:.2f} EUR / exp: {expected_crypto_amount} {currency}).")
+            log_type = "direct purchase" if is_purchase else "refill"
+            logger.info(f"Added pending {log_type} deposit {payment_id} for user {user_id} ({target_eur_amount:.2f} EUR / exp: {expected_crypto_amount} {currency}). Basket items: {len(basket_snapshot) if basket_snapshot else 0}.")
             return True
     except sqlite3.IntegrityError:
         logger.warning(f"Attempted to add duplicate pending deposit ID: {payment_id}")
@@ -652,13 +717,28 @@ def get_pending_deposit(payment_id: str):
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("SELECT user_id, currency, target_eur_amount, expected_crypto_amount FROM pending_deposits WHERE payment_id = ?", (payment_id,))
+            # Fetch all needed columns, including the new ones
+            c.execute("""
+                SELECT user_id, currency, target_eur_amount, expected_crypto_amount,
+                       is_purchase, basket_snapshot_json, discount_code_used
+                FROM pending_deposits WHERE payment_id = ?
+            """, (payment_id,))
             row = c.fetchone()
             if row:
                 row_dict = dict(row)
+                # Handle potential NULL for expected amount
                 if row_dict.get('expected_crypto_amount') is None:
                     logger.warning(f"Pending deposit {payment_id} has NULL expected_crypto_amount. Using 0.0.")
                     row_dict['expected_crypto_amount'] = 0.0
+                # Deserialize basket snapshot if present
+                if row_dict.get('basket_snapshot_json'):
+                    try:
+                        row_dict['basket_snapshot'] = json.loads(row_dict['basket_snapshot_json'])
+                    except json.JSONDecodeError:
+                        logger.error(f"Failed to decode basket_snapshot_json for payment {payment_id}.")
+                        row_dict['basket_snapshot'] = None # Indicate error or empty
+                else:
+                    row_dict['basket_snapshot'] = None
                 return row_dict
             else:
                 return None
@@ -666,22 +746,57 @@ def get_pending_deposit(payment_id: str):
         logger.error(f"DB error fetching pending deposit {payment_id}: {e}", exc_info=True)
         return None
 
+# --- HELPER TO UNRESERVE ITEMS (Synchronous) ---
+def _unreserve_basket_items(basket_snapshot: list | None):
+    """Helper to decrement reserved counts for items in a snapshot."""
+    if not basket_snapshot:
+        return
 
-def remove_pending_deposit(payment_id: str):
+    product_ids_to_release_counts = Counter(item['product_id'] for item in basket_snapshot)
+    if not product_ids_to_release_counts:
+        return
+
+    conn = None
     try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            result = c.execute("DELETE FROM pending_deposits WHERE payment_id = ?", (payment_id,))
-            conn.commit()
-            if result.rowcount > 0:
-                logger.info(f"Removed pending deposit record for payment ID: {payment_id}")
-                return True
-            else:
-                logger.info(f"No pending deposit record found to remove for payment ID: {payment_id}")
-                return False
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("BEGIN")
+        decrement_data = [(count, pid) for pid, count in product_ids_to_release_counts.items()]
+        c.executemany("UPDATE products SET reserved = MAX(0, reserved - ?) WHERE id = ?", decrement_data)
+        conn.commit()
+        total_released = sum(product_ids_to_release_counts.values())
+        logger.info(f"Un-reserved {total_released} items due to failed/expired basket payment.")
     except sqlite3.Error as e:
-        logger.error(f"DB error removing pending deposit {payment_id}: {e}", exc_info=True)
-        return False
+        logger.error(f"DB error un-reserving items: {e}", exc_info=True)
+        if conn and conn.in_transaction: conn.rollback()
+    finally:
+        if conn: conn.close()
+
+# --- REMOVE PENDING DEPOSIT (Modified to handle un-reserving) ---
+def remove_pending_deposit(payment_id: str, trigger: str = "unknown"): # Added trigger for logging
+    pending_info = get_pending_deposit(payment_id) # Get info *before* deleting
+    deleted = False
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        result = c.execute("DELETE FROM pending_deposits WHERE payment_id = ?", (payment_id,))
+        conn.commit()
+        deleted = result.rowcount > 0
+        if deleted:
+            logger.info(f"Removed pending deposit record for payment ID: {payment_id} (Trigger: {trigger})")
+        else:
+            logger.info(f"No pending deposit record found to remove for payment ID: {payment_id} (Trigger: {trigger})")
+    except sqlite3.Error as e:
+        logger.error(f"DB error removing pending deposit {payment_id} (Trigger: {trigger}): {e}", exc_info=True)
+        return False # Indicate failure
+
+    # If deletion was successful AND it was a purchase AND it was triggered by failure/expiry/cancel
+    if deleted and pending_info and pending_info.get('is_purchase') == 1 and trigger in ["failure", "expiry", "cancel"]:
+        logger.info(f"Payment {payment_id} was a direct purchase that failed/expired/cancelled. Attempting to un-reserve items.")
+        _unreserve_basket_items(pending_info.get('basket_snapshot'))
+
+    return deleted
 
 
 # --- Data Loading Functions (Synchronous) ---
