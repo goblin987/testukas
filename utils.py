@@ -378,14 +378,17 @@ LANGUAGES = {
         "welcome_button_edit": "✏️ Edit",
         "welcome_button_delete": "🗑️ Delete",
         "welcome_button_add_new": "➕ Add New Template",
+        "welcome_button_reset_default": "🔄 Reset to Built-in Default", # <<< NEW
         "welcome_activate_success": "✅ Template '{name}' activated.",
         "welcome_activate_fail": "❌ Failed to activate template '{name}'.",
         "welcome_add_name_prompt": "Enter a unique short name for the new template (e.g., 'default', 'promo_weekend'):",
         "welcome_add_name_exists": "❌ Error: A template with the name '{name}' already exists.",
         "welcome_add_text_prompt": "Template Name: {name}\n\nPlease reply with the full welcome message text. Available placeholders:\n{placeholders}",
+        "welcome_add_description_prompt": "Optional: Enter a short description for this template (admin view only). Send '-' to skip.", # <<< NEW
         "welcome_add_success": "✅ Welcome message template '{name}' added.",
         "welcome_add_fail": "❌ Failed to add welcome message template.",
         "welcome_edit_text_prompt": "Editing template '{name}'. Current text:\n\n{current_text}\n\nPlease reply with the new text. Available placeholders:\n{placeholders}",
+        "welcome_edit_description_prompt": "Editing description for '{name}'. Current: '{current_desc}'.\n\nEnter new description or send '-' to keep current.", # <<< NEW
         "welcome_edit_success": "✅ Template '{name}' updated.",
         "welcome_edit_fail": "❌ Failed to update template '{name}'.",
         "welcome_delete_confirm_title": "⚠️ Confirm Deletion",
@@ -396,6 +399,12 @@ LANGUAGES = {
         "welcome_delete_success": "✅ Template '{name}' deleted.",
         "welcome_delete_fail": "❌ Failed to delete template '{name}'.",
         "welcome_delete_not_found": "❌ Template '{name}' not found for deletion.",
+        "welcome_cannot_delete_active": "❌ Cannot delete the active template. Activate another first.", # <<< NEW
+        "welcome_reset_confirm_title": "⚠️ Confirm Reset", # <<< NEW
+        "welcome_reset_confirm_text": "Are you sure you want to reset the text of the 'default' template to the built-in version and activate it?", # <<< NEW
+        "welcome_reset_button_yes": "✅ Yes, Reset & Activate", # <<< NEW
+        "welcome_reset_success": "✅ 'default' template reset and activated.", # <<< NEW
+        "welcome_reset_fail": "❌ Failed to reset 'default' template.", # <<< NEW
     },
     # --- Lithuanian ---
     "lt": {
@@ -473,14 +482,17 @@ LANGUAGES = {
         "welcome_button_edit": "✏️ Redaguoti",
         "welcome_button_delete": "🗑️ Ištrinti",
         "welcome_button_add_new": "➕ Pridėti Naują Šabloną",
+        "welcome_button_reset_default": "🔄 Atstatyti Numatytąjį", # <<< NEW
         "welcome_activate_success": "✅ Šablonas '{name}' aktyvuotas.",
         "welcome_activate_fail": "❌ Nepavyko aktyvuoti šablono '{name}'.",
         "welcome_add_name_prompt": "Įveskite unikalų trumpą pavadinimą naujam šablonui (pvz., 'pagrindinis', 'akcija_savaitgalis'):",
         "welcome_add_name_exists": "❌ Klaida: Šablonas pavadinimu '{name}' jau egzistuoja.",
         "welcome_add_text_prompt": "Šablono Pavadinimas: {name}\n\nAtsakykite pilnu sveikinimo žinutės tekstu. Galimi laikikliai:\n{placeholders}",
+        "welcome_add_description_prompt": "Pasirinktinai: Įveskite trumpą šablono aprašymą (tik administratoriui). Siųskite '-' norėdami praleisti.", # <<< NEW
         "welcome_add_success": "✅ Sveikinimo žinutės šablonas '{name}' pridėtas.",
         "welcome_add_fail": "❌ Nepavyko pridėti sveikinimo žinutės šablono.",
         "welcome_edit_text_prompt": "Redaguojamas šablonas '{name}'. Dabartinis tekstas:\n\n{current_text}\n\nAtsakykite nauju tekstu. Galimi laikikliai:\n{placeholders}",
+        "welcome_edit_description_prompt": "Redaguojamas aprašymas šablonui '{name}'. Dabartinis: '{current_desc}'.\n\nĮveskite naują aprašymą arba siųskite '-', kad paliktumėte esamą.", # <<< NEW
         "welcome_edit_success": "✅ Šablonas '{name}' atnaujintas.",
         "welcome_edit_fail": "❌ Nepavyko atnaujinti šablono '{name}'.",
         "welcome_delete_confirm_title": "⚠️ Patvirtinti Trynimą",
@@ -491,6 +503,12 @@ LANGUAGES = {
         "welcome_delete_success": "✅ Šablonas '{name}' ištrintas.",
         "welcome_delete_fail": "❌ Nepavyko ištrinti šablono '{name}'.",
         "welcome_delete_not_found": "❌ Šablonas '{name}' nerastas trynimui.",
+        "welcome_cannot_delete_active": "❌ Negalima ištrinti aktyvaus šablono. Pirma aktyvuokite kitą.", # <<< NEW
+        "welcome_reset_confirm_title": "⚠️ Patvirtinti Atstatymą", # <<< NEW
+        "welcome_reset_confirm_text": "Ar tikrai norite atstatyti 'default' šablono tekstą į įtaisytąją versiją ir jį aktyvuoti?", # <<< NEW
+        "welcome_reset_button_yes": "✅ Taip, Atstatyti ir Aktyvuoti", # <<< NEW
+        "welcome_reset_success": "✅ 'default' šablonas atstatytas ir aktyvuotas.", # <<< NEW
+        "welcome_reset_fail": "❌ Nepavyko atstatyti 'default' šablono.", # <<< NEW
     },
     # --- Russian ---
     "ru": {
@@ -568,14 +586,17 @@ LANGUAGES = {
         "welcome_button_edit": "✏️ Редактировать",
         "welcome_button_delete": "🗑️ Удалить",
         "welcome_button_add_new": "➕ Добавить Новый Шаблон",
+        "welcome_button_reset_default": "🔄 Сбросить к Встроенному", # <<< NEW
         "welcome_activate_success": "✅ Шаблон '{name}' активирован.",
         "welcome_activate_fail": "❌ Не удалось активировать шаблон '{name}'.",
         "welcome_add_name_prompt": "Введите уникальное короткое имя для нового шаблона (например, 'default', 'promo_weekend'):",
         "welcome_add_name_exists": "❌ Ошибка: Шаблон с именем '{name}' уже существует.",
         "welcome_add_text_prompt": "Имя шаблона: {name}\n\nПожалуйста, ответьте полным текстом приветственного сообщения. Доступные плейсхолдеры:\n{placeholders}",
+        "welcome_add_description_prompt": "Необязательно: Введите краткое описание для этого шаблона (только для администратора). Отправьте '-' чтобы пропустить.", # <<< NEW
         "welcome_add_success": "✅ Шаблон приветственного сообщения '{name}' добавлен.",
         "welcome_add_fail": "❌ Не удалось добавить шаблон приветственного сообщения.",
         "welcome_edit_text_prompt": "Редактирование шаблона '{name}'. Текущий текст:\n\n{current_text}\n\nПожалуйста, ответьте новым текстом. Доступные плейсхолдеры:\n{placeholders}",
+        "welcome_edit_description_prompt": "Редактирование описания для '{name}'. Текущее: '{current_desc}'.\n\nВведите новое описание или отправьте '-', чтобы оставить текущее.", # <<< NEW
         "welcome_edit_success": "✅ Шаблон '{name}' обновлен.",
         "welcome_edit_fail": "❌ Не удалось обновить шаблон '{name}'.",
         "welcome_delete_confirm_title": "⚠️ Подтвердить Удаление",
@@ -586,6 +607,12 @@ LANGUAGES = {
         "welcome_delete_success": "✅ Шаблон '{name}' удален.",
         "welcome_delete_fail": "❌ Не удалось удалить шаблон '{name}'.",
         "welcome_delete_not_found": "❌ Шаблон '{name}' не найден для удаления.",
+        "welcome_cannot_delete_active": "❌ Нельзя удалить активный шаблон. Сначала активируйте другой.", # <<< NEW
+        "welcome_reset_confirm_title": "⚠️ Подтвердить Сброс", # <<< NEW
+        "welcome_reset_confirm_text": "Вы уверены, что хотите сбросить текст шаблона 'default' к встроенной версии и активировать его?", # <<< NEW
+        "welcome_reset_button_yes": "✅ Да, Сбросить и Активировать", # <<< NEW
+        "welcome_reset_success": "✅ Шаблон 'default' сброшен и активирован.", # <<< NEW
+        "welcome_reset_fail": "❌ Не удалось сбросить шаблон 'default'.", # <<< NEW
     }
 }
 # ==============================================================
@@ -750,24 +777,32 @@ def init_db():
             c.execute('''CREATE TABLE IF NOT EXISTS welcome_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE NOT NULL,
-                template_text TEXT NOT NULL
+                template_text TEXT NOT NULL,
+                description TEXT  -- <<< NEW Column
             )''')
+            # Add description column if missing
+            try:
+                c.execute("ALTER TABLE welcome_messages ADD COLUMN description TEXT")
+                logger.info("Added 'description' column to welcome_messages table.")
+            except sqlite3.OperationalError as alter_e:
+                 if "duplicate column name: description" in str(alter_e): pass # Ignore if already exists
+                 else: raise # Reraise other errors
 
             # <<< MODIFICATION: Add initial welcome message templates >>>
             initial_templates = [
-                ("default", LANGUAGES['en']['welcome']), # Ensure built-in default exists
-                ("clean", "👋 Hello, {username}!\n\n💰 Balance: {balance_str} EUR\n⭐ Status: {status}\n🛒 Basket: {basket_count} item(s)\n\nReady to shop or manage your profile? Explore the options below! 👇\n\n⚠️ Note: No refunds."),
-                ("enthusiastic", "✨ Welcome back, {username}! ✨\n\nReady for more? You've got **{balance_str} EUR** to spend! 💸\nYour basket ({basket_count} items) is waiting for you! 🛒\n\nYour current status: {status} {progress_bar}\nTotal Purchases: {purchases}\n\n👇 Dive back into the shop or check your profile! 👇\n\n⚠️ Note: No refunds."),
-                ("status_focus", "👑 Welcome, {username}! ({status}) 👑\n\nTrack your journey: {progress_bar}\nTotal Purchases: {purchases}\n\n💰 Balance: {balance_str} EUR\n🛒 Basket: {basket_count} item(s)\n\nManage your profile or explore the shop! 👇\n\n⚠️ Note: No refunds."),
-                ("minimalist", "Welcome, {username}.\n\nBalance: {balance_str} EUR\nBasket: {basket_count}\nStatus: {status}\n\nUse the menu below to navigate.\n\n⚠️ Note: No refunds."),
-                ("basket_focus", "Welcome back, {username}!\n\n🛒 You have **{basket_count} item(s)** in your basket! Don't forget about them!\n💰 Balance: {balance_str} EUR\n⭐ Status: {status} ({purchases} total purchases)\n\nCheck out your basket, keep shopping, or top up! 👇\n\n⚠️ Note: No refunds.")
+                ("default", LANGUAGES['en']['welcome'], "Built-in default message (EN)"),
+                ("clean", "👋 Hello, {username}!\n\n💰 Balance: {balance_str} EUR\n⭐ Status: {status}\n🛒 Basket: {basket_count} item(s)\n\nReady to shop or manage your profile? Explore the options below! 👇\n\n⚠️ Note: No refunds.", "Clean and direct style"),
+                ("enthusiastic", "✨ Welcome back, {username}! ✨\n\nReady for more? You've got **{balance_str} EUR** to spend! 💸\nYour basket ({basket_count} items) is waiting for you! 🛒\n\nYour current status: {status} {progress_bar}\nTotal Purchases: {purchases}\n\n👇 Dive back into the shop or check your profile! 👇\n\n⚠️ Note: No refunds.", "Enthusiastic style with emojis"),
+                ("status_focus", "👑 Welcome, {username}! ({status}) 👑\n\nTrack your journey: {progress_bar}\nTotal Purchases: {purchases}\n\n💰 Balance: {balance_str} EUR\n🛒 Basket: {basket_count} item(s)\n\nManage your profile or explore the shop! 👇\n\n⚠️ Note: No refunds.", "Focuses on status and progress"),
+                ("minimalist", "Welcome, {username}.\n\nBalance: {balance_str} EUR\nBasket: {basket_count}\nStatus: {status}\n\nUse the menu below to navigate.\n\n⚠️ Note: No refunds.", "Simple, minimal text"),
+                ("basket_focus", "Welcome back, {username}!\n\n🛒 You have **{basket_count} item(s)** in your basket! Don't forget about them!\n💰 Balance: {balance_str} EUR\n⭐ Status: {status} ({purchases} total purchases)\n\nCheck out your basket, keep shopping, or top up! 👇\n\n⚠️ Note: No refunds.", "Reminds user about items in basket")
             ]
             inserted_count = 0
-            for name, text in initial_templates:
+            for name, text, desc in initial_templates:
                 try:
                     # Use INSERT OR IGNORE to avoid errors if templates already exist
-                    c.execute("INSERT OR IGNORE INTO welcome_messages (name, template_text) VALUES (?, ?)", (name, text))
-                    if c.lastrowid != 0: # Check if a row was actually inserted
+                    c.execute("INSERT OR IGNORE INTO welcome_messages (name, template_text, description) VALUES (?, ?, ?)", (name, text, desc))
+                    if conn.changes() > 0: # Check if a row was actually inserted (more reliable than lastrowid for INSERT OR IGNORE)
                         inserted_count += 1
                 except sqlite3.Error as insert_e: # Catch potential errors during insert
                     logger.error(f"Error inserting template '{name}': {insert_e}")
@@ -1356,24 +1391,46 @@ def load_active_welcome_message() -> str:
     finally:
         if conn: conn.close()
 
-def get_welcome_message_templates() -> list[dict]:
-    """Fetches all welcome message templates (name and text)."""
+# <<< MODIFIED: Fetch description as well >>>
+def get_welcome_message_templates(limit: int | None = None, offset: int = 0) -> list[dict]:
+    """Fetches welcome message templates (name, text, description), optionally paginated."""
     templates = []
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("SELECT name, template_text FROM welcome_messages ORDER BY name")
+            query = "SELECT name, template_text, description FROM welcome_messages ORDER BY name"
+            params = []
+            if limit is not None:
+                query += " LIMIT ? OFFSET ?"
+                params.extend([limit, offset])
+            c.execute(query, params)
             templates = [dict(row) for row in c.fetchall()]
     except sqlite3.Error as e:
         logger.error(f"DB error fetching welcome message templates: {e}", exc_info=True)
     return templates
 
-def add_welcome_message_template(name: str, template_text: str) -> bool:
+# <<< NEW: Helper to get total count >>>
+def get_welcome_message_template_count() -> int:
+    """Gets the total number of welcome message templates."""
+    count = 0
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM welcome_messages")
+            result = c.fetchone()
+            if result: count = result[0]
+    except sqlite3.Error as e:
+        logger.error(f"DB error counting welcome message templates: {e}", exc_info=True)
+    return count
+
+# <<< MODIFIED: Handle description >>>
+def add_welcome_message_template(name: str, template_text: str, description: str | None = None) -> bool:
     """Adds a new welcome message template."""
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("INSERT INTO welcome_messages (name, template_text) VALUES (?, ?)", (name, template_text))
+            c.execute("INSERT INTO welcome_messages (name, template_text, description) VALUES (?, ?, ?)",
+                      (name, template_text, description))
             conn.commit()
             logger.info(f"Added welcome message template: '{name}'")
             return True
@@ -1384,12 +1441,30 @@ def add_welcome_message_template(name: str, template_text: str) -> bool:
         logger.error(f"DB error adding welcome message template '{name}': {e}", exc_info=True)
         return False
 
-def update_welcome_message_template(name: str, new_template_text: str) -> bool:
-    """Updates the text of an existing welcome message template."""
+# <<< MODIFIED: Handle description >>>
+def update_welcome_message_template(name: str, new_template_text: str | None = None, new_description: str | None = None) -> bool:
+    """Updates the text and/or description of an existing welcome message template."""
+    if new_template_text is None and new_description is None:
+        logger.warning("Update welcome template called without providing new text or description.")
+        return False
+    updates = []
+    params = []
+    if new_template_text is not None:
+        updates.append("template_text = ?")
+        params.append(new_template_text)
+    if new_description is not None:
+        # Handle empty string description as NULL
+        desc_to_save = new_description if new_description else None
+        updates.append("description = ?")
+        params.append(desc_to_save)
+
+    params.append(name)
+    sql = f"UPDATE welcome_messages SET {', '.join(updates)} WHERE name = ?"
+
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            result = c.execute("UPDATE welcome_messages SET template_text = ? WHERE name = ?", (new_template_text, name))
+            result = c.execute(sql, params)
             conn.commit()
             if result.rowcount > 0:
                 logger.info(f"Updated welcome message template: '{name}'")
