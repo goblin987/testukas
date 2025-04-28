@@ -7,7 +7,7 @@ import shutil
 import time
 import secrets # For generating random codes
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone # <<< Added timezone import
 from collections import defaultdict
 import math # Add math for pagination calculation
 from decimal import Decimal # Ensure Decimal is imported
@@ -210,10 +210,14 @@ async def _process_collected_media(context: ContextTypes.DEFAULT_TYPE):
         return
 
     logger.info(f"Job executing: Process media group {media_group_id} for user {user_id}")
-    user_data = context.application.user_data.get(user_id, {})
+    # Ensure user_data is accessed correctly via application
+    user_data = context.application.user_data.get(user_id, {}) # <<< MODIFIED HERE
     if not user_data:
+         # Check bot_data as a fallback if context structure is unusual, though user_data is standard
+         # user_data = context.bot_data.get(user_id, {}) # <<< Potential Fallback
+         # if not user_data:
          logger.error(f"Job {media_group_id}: Could not find user_data for user {user_id}.")
-         return
+         return # <<< Exit if no user_data found
 
     collected_info = user_data.get('collected_media', {}).get(media_group_id)
     if not collected_info or 'media' not in collected_info:
@@ -236,6 +240,7 @@ async def _process_collected_media(context: ContextTypes.DEFAULT_TYPE):
 
     await _prepare_and_confirm_drop(context, user_data, chat_id, user_id, caption, collected_media)
 
+
 # --- Modified Handler for Drop Details Message ---
 async def handle_adm_drop_details_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the message containing drop text and optional media (single or group)."""
@@ -245,7 +250,8 @@ async def handle_adm_drop_details_message(update: Update, context: ContextTypes.
 
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    user_specific_data = context.application.user_data.get(user_id, {})
+    # Ensure user_data is accessed correctly via application
+    user_specific_data = context.application.user_data.setdefault(user_id, {}) # <<< MODIFIED HERE
 
     if user_id != ADMIN_ID: return
 
@@ -297,6 +303,7 @@ async def handle_adm_drop_details_message(update: Update, context: ContextTypes.
             context.job_queue.run_once(
                 _process_collected_media,
                 when=timedelta(seconds=MEDIA_GROUP_COLLECTION_DELAY),
+                # Pass user_id to the job data
                 data={'media_group_id': media_group_id, 'chat_id': chat_id, 'user_id': user_id},
                 name=job_name,
                 job_kwargs={'misfire_grace_time': 15}
@@ -714,7 +721,8 @@ async def handle_confirm_add_drop(update: Update, context: ContextTypes.DEFAULT_
     user_id = query.from_user.id
     if user_id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
     chat_id = query.message.chat_id
-    user_specific_data = context.application.user_data.get(user_id, {})
+    # Ensure user_data is accessed correctly via application
+    user_specific_data = context.application.user_data.get(user_id, {}) # <<< MODIFIED HERE
     pending_drop = user_specific_data.get("pending_drop")
 
     if not pending_drop:
@@ -819,7 +827,8 @@ async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE, params=
     """Cancels the add product flow and cleans up."""
     query = update.callback_query
     user_id = update.effective_user.id
-    user_specific_data = context.application.user_data.get(user_id, {})
+    # Ensure user_data is accessed correctly via application
+    user_specific_data = context.application.user_data.get(user_id, {}) # <<< MODIFIED HERE
     pending_drop = user_specific_data.get("pending_drop")
 
     if pending_drop and "temp_dir" in pending_drop and pending_drop["temp_dir"]:
@@ -1226,7 +1235,7 @@ async def handle_adm_delete_prod(update: Update, context: ContextTypes.DEFAULT_T
         if conn: conn.close() # Close connection if opened
 
     context.user_data["confirm_action"] = f"confirm_remove_product|{product_id}"
-    msg = (f"⚠️ Confirm Deletion\n\nAre you sure you want to delete this specific product instance?\n"
+    msg = (f"⚠️ Confirm Deletion\n\nAre you sure you want to permanently delete this specific product instance?\n"
            f"Product ID: {product_id}\nDetails: {product_details}\n\n🚨 This action is irreversible!")
     keyboard = [[InlineKeyboardButton("✅ Yes, Delete Product", callback_data="confirm_yes"),
                  InlineKeyboardButton("❌ No, Cancel", callback_data=back_callback_data)]]
@@ -1361,9 +1370,10 @@ async def handle_adm_manage_discounts(update: Update, context: ContextTypes.DEFA
                 expiry_info = ""
                 if code['expiry_date']:
                      try:
-                         expiry_dt = datetime.fromisoformat(code['expiry_date'])
+                         expiry_dt = datetime.fromisoformat(code['expiry_date']).replace(tzinfo=timezone.utc) # Assume UTC
                          expiry_info = f" | Expires: {expiry_dt.strftime('%Y-%m-%d')}"
-                         if datetime.now() > expiry_dt and code['is_active']: status = "⏳ Expired"
+                         # Compare with current UTC time
+                         if datetime.now(timezone.utc) > expiry_dt and code['is_active']: status = "⏳ Expired"
                      except ValueError: expiry_info = " | Invalid Date"
                 toggle_text = "Deactivate" if code['is_active'] else "Activate"
                 delete_text = "🗑️ Delete"
@@ -1550,7 +1560,7 @@ async def handle_adm_manage_reviews(update: Update, context: ContextTypes.DEFAUL
                 date_str = review.get('review_date', '')
                 formatted_date = "???"
                 if date_str:
-                    try: formatted_date = datetime.fromisoformat(date_str).strftime("%Y-%m-%d")
+                    try: formatted_date = datetime.fromisoformat(date_str.replace('Z','+00:00')).strftime("%Y-%m-%d") # Handle Z for UTC
                     except ValueError: pass
                 username = review.get('username', 'anonymous')
                 username_display = f"@{username}" if username and username != 'anonymous' else username
@@ -1573,7 +1583,7 @@ async def handle_adm_manage_reviews(update: Update, context: ContextTypes.DEFAUL
     try:
         await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
     except telegram_error.BadRequest as e:
-        if "message is not modified" in str(e).lower(): await query.answer()
+        if "message is not modified" not in str(e).lower(): await query.answer()
         else: logger.warning(f"Failed to edit message for adm_manage_reviews: {e}"); await query.answer("Error updating review list.", show_alert=True)
     except Exception as e:
         logger.error(f"Unexpected error in adm_manage_reviews: {e}", exc_info=True)
@@ -1866,7 +1876,8 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await query.answer("Permission denied for this action.", show_alert=True)
         return
 
-    user_specific_data = context.application.user_data.get(user_id, {})
+    # Ensure user_data is accessed correctly via application
+    user_specific_data = context.application.user_data.get(user_id, {}) # <<< MODIFIED HERE
     action = user_specific_data.pop("confirm_action", None)
 
     if not action:
@@ -1891,7 +1902,7 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
              city_name = CITIES.get(city_id_str)
              if city_name:
                  c.execute("SELECT id FROM products WHERE city = ?", (city_name,))
-                 product_ids_to_delete = [row[0] for row in c.fetchall()]
+                 product_ids_to_delete = [row['id'] for row in c.fetchall()] # Use column name
                  if product_ids_to_delete:
                      placeholders = ','.join('?' * len(product_ids_to_delete))
                      c.execute(f"DELETE FROM product_media WHERE product_id IN ({placeholders})", product_ids_to_delete)
@@ -1916,10 +1927,10 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
              city_id_int, dist_id_int = int(city_id_str), int(dist_id_str)
              city_name = CITIES.get(city_id_str)
              c.execute("SELECT name FROM districts WHERE id = ? AND city_id = ?", (dist_id_int, city_id_int))
-             dist_res = c.fetchone(); district_name = dist_res['name'] if dist_res else None
+             dist_res = c.fetchone(); district_name = dist_res['name'] if dist_res else None # Use column name
              if city_name and district_name:
                  c.execute("SELECT id FROM products WHERE city = ? AND district = ?", (city_name, district_name))
-                 product_ids_to_delete = [row[0] for row in c.fetchall()]
+                 product_ids_to_delete = [row['id'] for row in c.fetchall()] # Use column name
                  if product_ids_to_delete:
                      placeholders = ','.join('?' * len(product_ids_to_delete))
                      c.execute(f"DELETE FROM product_media WHERE product_id IN ({placeholders})", product_ids_to_delete)
@@ -1941,7 +1952,7 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
              if not action_params: raise ValueError("Missing product_id")
              product_id = int(action_params[0])
              c.execute("SELECT ci.id as city_id, di.id as dist_id, p.product_type FROM products p LEFT JOIN cities ci ON p.city = ci.name LEFT JOIN districts di ON p.district = di.name AND ci.id = di.city_id WHERE p.id = ?", (product_id,))
-             back_details_tuple = c.fetchone()
+             back_details_tuple = c.fetchone() # Result is already a Row object
              c.execute("DELETE FROM product_media WHERE product_id = ?", (product_id,))
              delete_prod_result = c.execute("DELETE FROM products WHERE id = ?", (product_id,))
              if delete_prod_result.rowcount > 0:
@@ -1952,7 +1963,7 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
                        asyncio.create_task(asyncio.to_thread(shutil.rmtree, media_dir_to_delete, ignore_errors=True))
                        logger.info(f"Scheduled deletion of media dir: {media_dir_to_delete}")
                   if back_details_tuple and all([back_details_tuple['city_id'], back_details_tuple['dist_id'], back_details_tuple['product_type']]):
-                      next_callback = f"adm_manage_products_type|{back_details_tuple['city_id']}|{back_details_tuple['dist_id']}|{back_details_tuple['product_type']}"
+                      next_callback = f"adm_manage_products_type|{back_details_tuple['city_id']}|{back_details_tuple['dist_id']}|{back_details_tuple['product_type']}" # Use column names
                   else: next_callback = "adm_manage_products"
              else: conn.rollback(); success_msg = f"❌ Error: Product ID {product_id} not found."
         # --- Delete Product Type Logic ---
@@ -1974,7 +1985,7 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
              if not action_params: raise ValueError("Missing discount_id")
              code_id = int(action_params[0])
              c.execute("SELECT code FROM discount_codes WHERE id = ?", (code_id,))
-             code_res = c.fetchone(); code_text = code_res['code'] if code_res else f"ID {code_id}"
+             code_res = c.fetchone(); code_text = code_res['code'] if code_res else f"ID {code_id}" # Use column name
              delete_disc_result = c.execute("DELETE FROM discount_codes WHERE id = ?", (code_id,))
              if delete_disc_result.rowcount > 0:
                  conn.commit()
@@ -2032,6 +2043,208 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
         except Exception as edit_err: logger.error(f"Failed to edit message with error: {edit_err}")
     finally:
         if conn: conn.close() # Close connection if opened
+
+
+# --- Welcome Message Management Handlers --- START
+async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Displays the main menu for managing welcome message templates."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID:
+        return await query.answer("Access Denied.", show_alert=True)
+
+    lang = context.user_data.get("lang", "en")
+    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+
+    # Fetch templates and active template name
+    templates = get_welcome_message_templates() # from utils
+    conn = None
+    active_template_name = "default" # Default fallback
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        # Use column name
+        c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
+        setting_row = c.fetchone()
+        if setting_row:
+            active_template_name = setting_row['setting_value'] # Use column name
+    except sqlite3.Error as e:
+        logger.error(f"DB error fetching active welcome template name: {e}")
+    finally:
+        if conn: conn.close()
+
+    # Build message and keyboard
+    title = lang_data.get("manage_welcome_title", "⚙️ Manage Welcome Messages")
+    prompt = lang_data.get("manage_welcome_prompt", "Select a template to manage or activate:")
+    msg = f"{title}\n\n{prompt}\n"
+    keyboard = []
+
+    if not templates:
+        msg += "\nNo custom templates found. Only the default might be available (or needs creation)."
+        # Still allow adding
+    else:
+        templates.sort(key=lambda t: t['name']) # Sort by name
+        for template in templates:
+            name = template['name']
+            is_active = (name == active_template_name)
+            active_indicator = lang_data.get("welcome_template_active", " (Active ✅)") if is_active else lang_data.get("welcome_template_inactive", "")
+
+            # Row for each template: Edit button, Activate (if not active), Delete (if deletable)
+            row = [
+                # Button to view/edit the template text
+                InlineKeyboardButton(f"{name}{active_indicator}", callback_data=f"adm_edit_welcome|{name}")
+            ]
+            if not is_active:
+                 # Button to activate this template
+                 row.append(InlineKeyboardButton(lang_data.get("welcome_button_activate", "✅ Activate"), callback_data=f"adm_activate_welcome|{name}"))
+
+            # Prevent deleting the only template OR the specific 'default' template
+            can_delete = not (name == "default") # Simple rule: don't delete 'default'
+
+            # More robust rule (prevent deleting the *only* template):
+            # can_delete = len(templates) > 1 or name != "default"
+
+            if can_delete:
+                 row.append(InlineKeyboardButton(lang_data.get("welcome_button_delete", "🗑️ Delete"), callback_data=f"adm_delete_welcome_confirm|{name}"))
+
+            keyboard.append(row)
+
+    # Add "Add New" and "Back" buttons
+    keyboard.append([InlineKeyboardButton(lang_data.get("welcome_button_add_new", "➕ Add New Template"), callback_data="adm_add_welcome_start")])
+    keyboard.append([InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="admin_menu")])
+
+    # Send/Edit message
+    try:
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    except telegram_error.BadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"Error editing welcome management menu: {e}")
+            # Consider sending new message as fallback if edit fails significantly
+        else:
+             await query.answer() # Acknowledge if not modified
+    except Exception as e:
+        logger.error(f"Unexpected error in handle_adm_manage_welcome: {e}", exc_info=True)
+        await query.answer("An error occurred displaying the menu.", show_alert=True)
+
+# --- END OF NEW FUNCTION ---
+
+async def handle_adm_activate_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Activates the selected welcome message template."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
+    if not params: return await query.answer("Error: Template name missing.", show_alert=True)
+    template_name = params[0]
+    lang = context.user_data.get("lang", "en")
+    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+
+    success = set_active_welcome_message(template_name) # Use helper from utils
+    if success:
+        msg_template = lang_data.get("welcome_activate_success", "✅ Template '{name}' activated.")
+        await query.answer(msg_template.format(name=template_name))
+        await handle_adm_manage_welcome(update, context) # Refresh menu
+    else:
+        msg_template = lang_data.get("welcome_activate_fail", "❌ Failed to activate template '{name}'.")
+        await query.answer(msg_template.format(name=template_name), show_alert=True)
+
+async def handle_adm_add_welcome_start(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Starts the process of adding a new welcome template."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
+    lang = context.user_data.get("lang", "en")
+    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+
+    context.user_data['state'] = 'awaiting_welcome_template_name'
+    prompt = lang_data.get("welcome_add_name_prompt", "Enter a unique short name for the new template (e.g., 'default', 'promo_weekend'):")
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_welcome")]]
+    await query.edit_message_text(prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    await query.answer("Enter template name in chat.")
+
+async def handle_adm_edit_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Starts editing an existing welcome template."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
+    if not params: return await query.answer("Error: Template name missing.", show_alert=True)
+    template_name = params[0]
+    lang = context.user_data.get("lang", "en")
+    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+
+    # Fetch current text
+    current_text = ""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT template_text FROM welcome_messages WHERE name = ?", (template_name,))
+        row = c.fetchone()
+        if not row:
+             await query.answer("Template not found.", show_alert=True)
+             return await handle_adm_manage_welcome(update, context)
+        current_text = row['template_text'] # Use column name
+    except sqlite3.Error as e:
+        logger.error(f"DB error fetching template '{template_name}' for edit: {e}")
+        await query.answer("Error fetching template text.", show_alert=True)
+        return
+    finally:
+        if conn: conn.close()
+
+    context.user_data['state'] = 'awaiting_welcome_template_edit'
+    context.user_data['editing_welcome_template_name'] = template_name
+
+    placeholders = "{username}, {status}, {progress_bar}, {balance_str}, {purchases}, {basket_count}"
+    prompt_template = lang_data.get("welcome_edit_text_prompt", "Editing template '{name}'. Current text:\n\n{current_text}\n\nPlease reply with the new text. Available placeholders:\n{placeholders}")
+    prompt = prompt_template.format(name=template_name, current_text=current_text, placeholders=placeholders)
+    # Limit prompt length for display
+    if len(prompt) > 4000: prompt = prompt[:4000] + "\n[... Current text truncated ...]"
+
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_welcome")]]
+    await query.edit_message_text(prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    await query.answer("Enter new template text in chat.")
+
+async def handle_adm_delete_welcome_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Confirms deletion of a welcome message template."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
+    if not params: return await query.answer("Error: Template name missing.", show_alert=True)
+    template_name = params[0]
+    lang = context.user_data.get("lang", "en")
+    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+
+    # Fetch current active and total templates
+    conn = None
+    active_template_name = "default"
+    template_count = 0
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
+        row = c.fetchone(); active_template_name = row['setting_value'] if row else "default" # Use column name
+        c.execute("SELECT COUNT(*) FROM welcome_messages")
+        template_count = c.fetchone()[0]
+    except sqlite3.Error as e: logger.error(f"DB error checking template status for delete: {e}")
+    finally:
+         if conn: conn.close()
+
+    if template_name == "default":
+        await query.answer("Cannot delete the 'default' template.", show_alert=True)
+        return
+
+    context.user_data["confirm_action"] = f"delete_welcome_template|{template_name}"
+    title = lang_data.get("welcome_delete_confirm_title", "⚠️ Confirm Deletion")
+    text_template = lang_data.get("welcome_delete_confirm_text", "Are you sure you want to delete the welcome message template named '{name}'?")
+    msg = f"{title}\n\n{text_template.format(name=template_name)}"
+
+    if template_name == active_template_name:
+        msg += lang_data.get("welcome_delete_confirm_active", "\n\n🚨 WARNING: This is the currently active template! Deleting it will revert to the default built-in message.")
+    if template_count <= 1: # Should only happen if 'default' is somehow missing, or only one custom exists
+        msg += lang_data.get("welcome_delete_confirm_last", "\n\n🚨 WARNING: This is the last template! Deleting it will revert to the default built-in message.")
+
+    keyboard = [
+        [InlineKeyboardButton(lang_data.get("welcome_delete_button_yes", "✅ Yes, Delete Template"), callback_data="confirm_yes")],
+        [InlineKeyboardButton("❌ No, Cancel", callback_data="adm_manage_welcome")]
+    ]
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+
+# --- Welcome Message Management Handlers --- END
 
 
 # --- Admin Message Handlers (Used when state is set) ---
@@ -2400,7 +2613,10 @@ async def handle_adm_add_type_emoji_message(update: Update, context: ContextType
         await send_message_with_retry(context.bot, chat_id, "❌ Error: Context lost. Please start adding the type again.", parse_mode=None)
         return
 
-    if len(emoji) != 1: # Basic check
+    # Basic emoji validation (checks length and if it's likely an emoji)
+    # This is not foolproof but avoids adding the 'emoji' library dependency
+    is_likely_emoji = len(emoji) == 1 and ord(emoji) > 256
+    if not is_likely_emoji:
         invalid_emoji_msg = lang_data.get("admin_invalid_emoji", "❌ Invalid input. Please send a single emoji.")
         await send_message_with_retry(context.bot, chat_id, invalid_emoji_msg, parse_mode=None)
         return
@@ -2453,7 +2669,9 @@ async def handle_adm_edit_type_emoji_message(update: Update, context: ContextTyp
         await send_message_with_retry(context.bot, chat_id, "❌ Error: Context lost. Please start editing the type again.", parse_mode=None)
         return
 
-    if len(new_emoji) != 1: # Basic check
+    # Basic emoji validation
+    is_likely_emoji = len(new_emoji) == 1 and ord(new_emoji) > 256
+    if not is_likely_emoji:
         invalid_emoji_msg = lang_data.get("admin_invalid_emoji", "❌ Invalid input. Please send a single emoji.")
         await send_message_with_retry(context.bot, chat_id, invalid_emoji_msg, parse_mode=None)
         return
@@ -2767,15 +2985,13 @@ async def handle_adm_welcome_template_text_message(update: Update, context: Cont
         context.user_data.pop('state', None)
         context.user_data.pop('editing_welcome_template_name', None)
 
-    # <<< MODIFICATION START: Send the menu as a new message >>>
-    # We need a context or update object that has a callback_query to call handle_adm_manage_welcome
-    # Since this is a message handler, we don't have one. We'll build and send manually.
-    templates = get_welcome_message_templates()
+    # Send the management menu again after add/edit
+    templates = get_welcome_message_templates() # Re-fetch
     conn_m = None; active_template_name = "default"
     try:
         conn_m = get_db_connection(); c_m = conn_m.cursor()
         c_m.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
-        res_m = c_m.fetchone(); active_template_name = res_m['setting_value'] if res_m else "default"
+        res_m = c_m.fetchone(); active_template_name = res_m['setting_value'] if res_m else "default" # Use column name
     except Exception as e: logger.error(f"Error fetching active welcome template name after edit/add: {e}")
     finally:
         if conn_m: conn_m.close()
@@ -2786,26 +3002,20 @@ async def handle_adm_welcome_template_text_message(update: Update, context: Cont
     menu_keyboard = []
     if not templates: menu_msg += "\nNo templates found. Add one?"
     else:
+        templates.sort(key=lambda t: t['name'])
         for template in templates:
             name = template['name']
             is_active = (name == active_template_name)
             active_indicator = lang_data.get("welcome_template_active", " (Active ✅)") if is_active else lang_data.get("welcome_template_inactive", "")
             row = [InlineKeyboardButton(f"{name}{active_indicator}", callback_data=f"adm_edit_welcome|{name}")]
             if not is_active: row.append(InlineKeyboardButton(lang_data.get("welcome_button_activate", "✅ Activate"), callback_data=f"adm_activate_welcome|{name}"))
-            if len(templates) > 1 or name != "default": row.append(InlineKeyboardButton(lang_data.get("welcome_button_delete", "🗑️ Delete"), callback_data=f"adm_delete_welcome_confirm|{name}"))
+            can_delete = not (name == "default")
+            if can_delete: row.append(InlineKeyboardButton(lang_data.get("welcome_button_delete", "🗑️ Delete"), callback_data=f"adm_delete_welcome_confirm|{name}"))
             menu_keyboard.append(row)
     menu_keyboard.append([InlineKeyboardButton(lang_data.get("welcome_button_add_new", "➕ Add New Template"), callback_data="adm_add_welcome_start")])
     menu_keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")])
 
-    # Use the original update's chat_id if available, otherwise use the one from the message
-    # Correction: Cannot reliably get query from message update context. Use chat_id from message.
     await send_message_with_retry(context.bot, chat_id, menu_msg, reply_markup=InlineKeyboardMarkup(menu_keyboard), parse_mode=None)
-    # <<< MODIFICATION END >>>
+
 
 # --- Admin Message Handlers (Existing - Kept for completeness) ---
-# These handlers are mapped in main.py's STATE_HANDLERS dictionary
-
-# ... (Keep existing message handlers: handle_adm_add_city_message, handle_adm_add_district_message, handle_adm_edit_district_message, handle_adm_edit_city_message, handle_adm_custom_size_message, handle_adm_price_message, handle_adm_bot_media_message, handle_adm_add_type_message, handle_adm_add_type_emoji_message, handle_adm_edit_type_emoji_message, handle_adm_discount_code_message, handle_adm_discount_value_message, handle_adm_broadcast_inactive_days_message, handle_adm_broadcast_message) ...
-
-
-# --- END OF FILE admin.py ---
