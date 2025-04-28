@@ -603,13 +603,13 @@ async def handle_adm_city(update: Update, context: ContextTypes.DEFAULT_TYPE, pa
     """Admin selects city to add product to."""
     query = update.callback_query
     if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
-    lang = context.user_data.get("lang", "en")
+    lang, lang_data = _get_lang_data(context) # Use helper
     if not CITIES:
         return await query.edit_message_text("No cities configured. Please add a city first via 'Manage Cities'.", parse_mode=None)
     sorted_city_ids = sorted(CITIES.keys(), key=lambda city_id: CITIES.get(city_id, ''))
     keyboard = [[InlineKeyboardButton(f"🏙️ {CITIES.get(c,'N/A')}", callback_data=f"adm_dist|{c}")] for c in sorted_city_ids]
     keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")])
-    select_city_text = LANGUAGES.get(lang, {}).get("admin_select_city", "Select City to Add Product:")
+    select_city_text = lang_data.get("admin_select_city", "Select City to Add Product:")
     await query.edit_message_text(select_city_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
 async def handle_adm_dist(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
@@ -622,8 +622,8 @@ async def handle_adm_dist(update: Update, context: ContextTypes.DEFAULT_TYPE, pa
     if not city_name:
         return await query.edit_message_text("Error: City not found. Please select again.", parse_mode=None)
     districts_in_city = DISTRICTS.get(city_id, {})
-    lang = context.user_data.get("lang", "en")
-    select_district_template = LANGUAGES.get(lang, {}).get("admin_select_district", "Select District in {city}:")
+    lang, lang_data = _get_lang_data(context) # Use helper
+    select_district_template = lang_data.get("admin_select_district", "Select District in {city}:")
     if not districts_in_city:
         keyboard = [[InlineKeyboardButton("⬅️ Back to Cities", callback_data="adm_city")]]
         return await query.edit_message_text(f"No districts found for {city_name}. Please add districts via 'Manage Districts'.",
@@ -649,8 +649,8 @@ async def handle_adm_type(update: Update, context: ContextTypes.DEFAULT_TYPE, pa
     district_name = DISTRICTS.get(city_id, {}).get(dist_id)
     if not city_name or not district_name:
         return await query.edit_message_text("Error: City/District not found. Please select again.", parse_mode=None)
-    lang = context.user_data.get("lang", "en")
-    select_type_text = LANGUAGES.get(lang, {}).get("admin_select_type", "Select Product Type:")
+    lang, lang_data = _get_lang_data(context) # Use helper
+    select_type_text = lang_data.get("admin_select_type", "Select Product Type:")
     if not PRODUCT_TYPES:
         return await query.edit_message_text("No product types configured. Add types via 'Manage Product Types'.", parse_mode=None)
 
@@ -1233,7 +1233,7 @@ async def handle_adm_delete_prod(update: Update, context: ContextTypes.DEFAULT_T
     msg = (f"⚠️ Confirm Deletion\n\nAre you sure you want to permanently delete this specific product instance?\n"
            f"Product ID: {product_id}\nDetails: {product_details}\n\n🚨 This action is irreversible!")
     keyboard = [[InlineKeyboardButton("✅ Yes, Delete Product", callback_data="confirm_yes"),
-                 InlineKeyboardButton("❌ No, Cancel", callback_data=back_callback_data)]]
+                 InlineKeyboardButton("❌ No, Cancel", callback_data=back_callback)]]
     await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
 
@@ -1261,8 +1261,7 @@ async def handle_adm_manage_types(update: Update, context: ContextTypes.DEFAULT_
 async def handle_adm_edit_type_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     """Shows options for a specific product type: change emoji, edit description, or delete."""
     query = update.callback_query
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
     if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
     if not params: return await query.answer("Error: Type name missing.", show_alert=True)
 
@@ -1291,7 +1290,7 @@ async def handle_adm_edit_type_menu(update: Update, context: ContextTypes.DEFAUL
 
     try:
         # <<< FIX: Change parse_mode to None to avoid errors >>>
-        await query.edit_message_text(msg.replace('*','').replace('_',''), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        await query.edit_message_text(msg.replace('*','').replace('_','').replace('\\(','(').replace('\\)',')'), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
     except telegram_error.BadRequest as e:
         if "message is not modified" in str(e).lower(): await query.answer()
         else:
@@ -1302,8 +1301,7 @@ async def handle_adm_edit_type_menu(update: Update, context: ContextTypes.DEFAUL
 async def handle_adm_change_type_emoji(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     """Handles 'Change Emoji' button press."""
     query = update.callback_query
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
     if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
     if not params: return await query.answer("Error: Type name missing.", show_alert=True)
     type_name = params[0]
@@ -1539,8 +1537,8 @@ async def handle_adm_set_media(update: Update, context: ContextTypes.DEFAULT_TYP
     """Handles 'Set Bot Media' button press."""
     query = update.callback_query
     if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
-    lang = context.user_data.get("lang", "en")
-    set_media_prompt_text = LANGUAGES.get(lang, {}).get("set_media_prompt_plain", "Send a photo, video, or GIF to display above all messages:")
+    lang, lang_data = _get_lang_data(context) # Use helper
+    set_media_prompt_text = lang_data.get("set_media_prompt_plain", "Send a photo, video, or GIF to display above all messages:")
     context.user_data["state"] = "awaiting_bot_media"
     keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="admin_menu")]]
     await query.edit_message_text(set_media_prompt_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
@@ -1645,8 +1643,7 @@ async def handle_adm_broadcast_start(update: Update, context: ContextTypes.DEFAU
     query = update.callback_query
     if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
 
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     # Clear previous broadcast data
     context.user_data.pop('broadcast_content', None)
@@ -1673,8 +1670,7 @@ async def handle_adm_broadcast_target_type(update: Update, context: ContextTypes
 
     target_type = params[0]
     context.user_data['broadcast_target_type'] = target_type
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     if target_type == 'all':
         context.user_data['state'] = 'awaiting_broadcast_message'
@@ -1729,8 +1725,7 @@ async def handle_adm_broadcast_target_city(update: Update, context: ContextTypes
 
     city_name = params[0]
     context.user_data['broadcast_target_value'] = city_name
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     context.user_data['state'] = 'awaiting_broadcast_message'
     ask_msg_text = lang_data.get("broadcast_ask_message", "📝 Now send the message content (text, photo, video, or GIF with caption):")
@@ -1746,8 +1741,7 @@ async def handle_adm_broadcast_target_status(update: Update, context: ContextTyp
 
     status_value = params[0]
     context.user_data['broadcast_target_value'] = status_value
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     context.user_data['state'] = 'awaiting_broadcast_message'
     ask_msg_text = lang_data.get("broadcast_ask_message", "📝 Now send the message content (text, photo, video, or GIF with caption):")
@@ -2029,17 +2023,25 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
             else: conn.rollback(); success_msg = f"❌ Error: Welcome template '{name_to_delete}' not found."
         # <<< Reset Welcome Message Logic >>>
         elif action_type == "reset_default_welcome":
-            lang = context.user_data.get("lang", "en")
-            lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-            default_text = LANGUAGES['en']['welcome'] # Use the built-in English default
+            lang_data = LANGUAGES.get('en', {}) # Use English for internal messages and default text
+            default_text = lang_data.get('welcome', DEFAULT_WELCOME_MESSAGE) # Use default from English or hardcoded
             # Update the text in the DB
             update_res = c.execute("UPDATE welcome_messages SET template_text = ?, description = ? WHERE name = ?",
                                    (default_text, "Built-in default message (EN)", "default"))
+            if update_res.rowcount == 0:
+                 logger.warning("Could not find 'default' template to reset. Trying to insert.")
+                 # Attempt to insert if it wasn't there
+                 c.execute("INSERT OR IGNORE INTO welcome_messages (name, template_text, description) VALUES (?, ?, ?)",
+                           ("default", default_text, "Built-in default message (EN)"))
+
             # Activate it
             c.execute("INSERT OR REPLACE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
                       ("active_welcome_message_name", "default"))
             conn.commit()
-            success_msg = lang_data.get("welcome_reset_success", "✅ 'default' template reset and activated.")
+            # Use language from user_data for the success message display
+            user_lang = context.user_data.get("lang", "en")
+            display_lang_data = LANGUAGES.get(user_lang, LANGUAGES['en'])
+            success_msg = display_lang_data.get("welcome_reset_success", "✅ 'default' template reset and activated.")
             next_callback = "adm_manage_welcome|0"
         # <<< End Welcome Message Logic >>>
         else: # Unknown action type
@@ -2090,7 +2092,7 @@ async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAUL
         # Use column name
         c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
         setting_row = c.fetchone()
-        if setting_row:
+        if setting_row and setting_row['setting_value']: # Check if value is not None/empty
             active_template_name = setting_row['setting_value'] # Use column name
     except sqlite3.Error as e:
         logger.error(f"DB error fetching active welcome template name: {e}")
@@ -2114,7 +2116,10 @@ async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAUL
             safe_desc = helpers.escape_markdown(desc, version=2)
 
             is_active = (name == active_template_name)
-            active_indicator = lang_data.get("welcome_template_active", " \\(Active ✅\\)") if is_active else lang_data.get("welcome_template_inactive", "")
+            # <<< FIX: Escape the parentheses in the active indicator >>>
+            active_indicator_raw = lang_data.get("welcome_template_active", " (Active ✅)") if is_active else lang_data.get("welcome_template_inactive", "")
+            active_indicator = active_indicator_raw.replace("(", "\\(").replace(")", "\\)") # Manually escape parentheses for MDv2
+
 
             # Display Name, Description, and Active Status
             msg_parts.append(f"\n📄 *{safe_name}*{active_indicator}\n_{safe_desc}_\n") # Removed extra newline
@@ -2136,7 +2141,11 @@ async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAUL
         if current_page > 1: nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"adm_manage_welcome|{max(0, offset - TEMPLATES_PER_PAGE)}"))
         if current_page < total_pages: nav_buttons.append(InlineKeyboardButton("➡️ Next", callback_data=f"adm_manage_welcome|{offset + TEMPLATES_PER_PAGE}"))
         if nav_buttons: keyboard.append(nav_buttons)
-        if total_pages > 1: msg_parts.append(f"\nPage {current_page}/{total_pages}")
+        if total_pages > 1:
+            # Escape page number indicator too
+            page_indicator = f"Page {current_page}/{total_pages}"
+            escaped_page_indicator = helpers.escape_markdown(page_indicator, version=2)
+            msg_parts.append(f"\n{escaped_page_indicator}")
 
 
     # Add "Add New", "Reset Default", and "Back" buttons
@@ -2151,15 +2160,25 @@ async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAUL
 
     # Send/Edit message
     try:
-        # <<< FIX: Use Markdown V2 for potential formatting, but handle errors >>>
+        # Try sending with Markdown V2
         await query.edit_message_text(final_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2)
     except telegram_error.BadRequest as e:
         if "message is not modified" not in str(e).lower():
             logger.error(f"Error editing welcome management menu (Markdown V2): {e}. Message: {final_msg[:500]}...") # Log snippet
             # Fallback to plain text
-            plain_msg = final_msg.replace("*", "").replace("_", "").replace("\\[", "[").replace("\\]", "]").replace("\\(", "(").replace("\\)",")") # Basic unescaping for logs might be needed too
+            # More robust unescaping for fallback
+            plain_msg = helpers.escape_markdown(final_msg, version=2) # First escape *everything*
+            plain_msg = plain_msg.replace("\\*", "*").replace("\\_", "_").replace("\\`", "`") # Unescape only intended markdown if needed, or remove all
+            # Simpler fallback: remove all markdown chars
+            plain_msg_fallback = final_msg
+            for char in ['*', '_', '`', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']:
+                plain_msg_fallback = plain_msg_fallback.replace(f'\\{char}', char) # Remove escapes first
+            for char in ['*', '_', '`']: # Remove common markdown chars
+                plain_msg_fallback = plain_msg_fallback.replace(char, '')
+
             try:
-                await query.edit_message_text(plain_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+                await query.edit_message_text(plain_msg_fallback, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+                logger.info("Sent welcome management menu with plain text fallback due to Markdown V2 error.")
             except Exception as fallback_e:
                 logger.error(f"Error editing welcome management menu (Fallback): {fallback_e}")
                 await query.answer("Error displaying menu.", show_alert=True)
@@ -2178,8 +2197,7 @@ async def handle_adm_activate_welcome(update: Update, context: ContextTypes.DEFA
 
     template_name = params[0]
     offset = int(params[1])
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     success = set_active_welcome_message(template_name) # Use helper from utils
     if success:
@@ -2194,8 +2212,7 @@ async def handle_adm_add_welcome_start(update: Update, context: ContextTypes.DEF
     """Starts the process of adding a new welcome template (gets name)."""
     query = update.callback_query
     if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     context.user_data['state'] = 'awaiting_welcome_template_name'
     prompt = lang_data.get("welcome_add_name_prompt", "Enter a unique short name for the new template (e.g., 'default', 'promo_weekend'):")
@@ -2213,8 +2230,7 @@ async def handle_adm_edit_welcome(update: Update, context: ContextTypes.DEFAULT_
 
     template_name = params[0]
     offset = int(params[1])
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     # Fetch current text and description
     current_text = ""
@@ -2256,7 +2272,9 @@ async def handle_adm_edit_welcome(update: Update, context: ContextTypes.DEFAULT_
     ]
     try:
         # <<< FIX: Change parse_mode to None to avoid errors >>>
-        await query.edit_message_text(msg.replace("*", "").replace("_", ""), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        # Also manually remove markdown chars for plain text display
+        plain_msg = msg.replace("*", "").replace("_", "").replace("\\", "")
+        await query.edit_message_text(plain_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
     except telegram_error.BadRequest as e:
         if "message is not modified" not in str(e).lower(): logger.error(f"Error editing edit welcome menu: {e}. Message: {msg}")
         else: await query.answer() # Acknowledge if not modified
@@ -2273,8 +2291,7 @@ async def handle_adm_edit_welcome_text(update: Update, context: ContextTypes.DEF
 
     template_name = params[0]
     offset = context.user_data.get('editing_welcome_offset', 0) # Get offset from context
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     # Fetch current text to show in prompt
     current_text = ""
@@ -2295,19 +2312,18 @@ async def handle_adm_edit_welcome_text(update: Update, context: ContextTypes.DEF
 
     placeholders = "`{username}`, `{status}`, `{progress_bar}`, `{balance_str}`, `{purchases}`, `{basket_count}`"
     prompt_template = lang_data.get("welcome_edit_text_prompt", "Editing Text for '{name}'. Current text:\n\n{current_text}\n\nPlease reply with the new text. Available placeholders:\n{placeholders}")
-    # Escape name and current text for display
+    # Escape name and current text for display (plain text mode)
     prompt = prompt_template.format(
-        name=helpers.escape_markdown(template_name, version=2),
-        current_text=helpers.escape_markdown(current_text, version=2), # Escape current text display
-        placeholders=placeholders
+        name=template_name,
+        current_text=current_text,
+        placeholders=placeholders.replace('`','') # Remove backticks for plain text
     )
     if len(prompt) > 4000: prompt = prompt[:4000] + "\n[... Current text truncated ...]"
 
     # Go back to the specific template's edit menu
     keyboard = [[InlineKeyboardButton("❌ Cancel Edit", callback_data=f"adm_edit_welcome|{template_name}|{offset}")]]
     try:
-        # <<< FIX: Change parse_mode to None for reliability >>>
-        await query.edit_message_text(prompt.replace('`',''), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        await query.edit_message_text(prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
     except telegram_error.BadRequest as e:
         if "message is not modified" not in str(e).lower(): logger.error(f"Error editing edit text prompt: {e}")
         else: await query.answer()
@@ -2322,8 +2338,7 @@ async def handle_adm_edit_welcome_desc(update: Update, context: ContextTypes.DEF
 
     template_name = params[0]
     offset = context.user_data.get('editing_welcome_offset', 0)
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     # Fetch current description
     current_desc = ""
@@ -2356,8 +2371,7 @@ async def handle_adm_delete_welcome_confirm(update: Update, context: ContextType
 
     template_name = params[0]
     offset = int(params[1])
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     # Fetch current active template
     conn = None
@@ -2397,16 +2411,15 @@ async def handle_reset_default_welcome(update: Update, context: ContextTypes.DEF
     """Confirms resetting the default welcome message."""
     query = update.callback_query
     if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
-    context.user_data["confirm_action"] = "reset_default_welcome"
+    context.user_data["confirm_action"] = "reset_default_welcome" # This key should already be handled by confirm_yes
     title = lang_data.get("welcome_reset_confirm_title", "⚠️ Confirm Reset")
     text = lang_data.get("welcome_reset_confirm_text", "Are you sure you want to reset the text of the 'default' template to the built-in version and activate it?")
     button_yes = lang_data.get("welcome_reset_button_yes", "✅ Yes, Reset & Activate")
 
     keyboard = [
-        [InlineKeyboardButton(button_yes, callback_data="confirm_yes")],
+        [InlineKeyboardButton(button_yes, callback_data="confirm_yes")], # Goes to the generic confirmation handler
         [InlineKeyboardButton("❌ No, Cancel", callback_data="adm_manage_welcome|0")]
     ]
     await query.edit_message_text(f"{title}\n\n{text}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
@@ -2451,9 +2464,8 @@ async def _show_welcome_preview(update: Update, context: ContextTypes.DEFAULT_TY
 
     try:
         # Format the preview text
-        escaped_dummy_username = helpers.escape_markdown(dummy_username, version=2)
         preview_text_raw = template_text.format(
-            username=escaped_dummy_username, # Use escaped username in format
+            username=dummy_username, # Use raw username here, will escape below
             status=dummy_status,
             progress_bar=dummy_progress,
             balance_str=dummy_balance,
@@ -2464,32 +2476,24 @@ async def _show_welcome_preview(update: Update, context: ContextTypes.DEFAULT_TY
     except KeyError as e:
         logger.warning(f"KeyError formatting welcome preview for '{template_name}': {e}")
         err_msg_template = lang_data.get("welcome_invalid_placeholder", "⚠️ Formatting Error! Missing placeholder: `{key}`\n\nRaw Text:\n{text}")
-        # Escape the raw template text before inserting into the error message
-        preview_text_raw = err_msg_template.format(key=e, text=helpers.escape_markdown(template_text[:500], version=2))
+        preview_text_raw = err_msg_template.format(key=e, text=template_text[:500]) # Show raw text in case of error
     except Exception as format_e:
         logger.error(f"Unexpected error formatting preview: {format_e}")
         err_msg_template = lang_data.get("welcome_formatting_error", "⚠️ Unexpected Formatting Error!\n\nRaw Text:\n{text}")
-        # Escape the raw template text before inserting into the error message
-        preview_text_raw = err_msg_template.format(text=helpers.escape_markdown(template_text[:500], version=2))
+        preview_text_raw = err_msg_template.format(text=template_text[:500])
 
-    # Escape the *result* of the format for display (handles errors too)
-    preview_text_escaped = helpers.escape_markdown(preview_text_raw, version=2)
-
+    # Prepare display message (plain text)
     title = lang_data.get("welcome_preview_title", "--- Welcome Message Preview ---")
     name_label = lang_data.get("welcome_preview_name", "Name")
     desc_label = lang_data.get("welcome_preview_desc", "Desc")
     confirm_prompt = lang_data.get("welcome_preview_confirm", "Save this template?")
 
-    # Escape name and description for the header part
-    safe_name = helpers.escape_markdown(template_name, version=2)
-    safe_desc = helpers.escape_markdown(template_description or "Not set", version=2) # Handle None case
-
-    msg = f"*{title}*\n\n"
-    msg += f"*{name_label}:* {safe_name}\n"
-    msg += f"*{desc_label}:* _{safe_desc}_\n"
-    msg += f"\\-\\-\\-\n" # Escape hyphens
-    msg += f"{preview_text_escaped}\n" # Display the formatted (and potentially error) message
-    msg += f"\\-\\-\\-\n" # Escape hyphens
+    msg = f"{title}\n\n"
+    msg += f"{name_label}: {template_name}\n"
+    msg += f"{desc_label}: {template_description or 'Not set'}\n"
+    msg += f"---\n"
+    msg += f"{preview_text_raw}\n" # Display the formatted (and potentially error) message raw
+    msg += f"---\n"
     msg += f"\n{confirm_prompt}"
 
     # Set state for confirmation callback
@@ -2503,21 +2507,20 @@ async def _show_welcome_preview(update: Update, context: ContextTypes.DEFAULT_TY
         [InlineKeyboardButton("❌ Cancel", callback_data=cancel_callback)]
     ]
 
-    # Send or edit the message
+    # Send or edit the message (using plain text)
     message_to_edit = query.message if query else None
     if message_to_edit:
         try:
-            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2)
+            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
         except telegram_error.BadRequest as e:
              if "message is not modified" not in str(e).lower():
-                 logger.error(f"Error editing preview message (MDv2): {e}")
-                 # Fallback to plain text for preview if MD fails
-                 plain_msg = msg.replace("*", "").replace("_", "").replace("\\","")
-                 await send_message_with_retry(context.bot, chat_id, plain_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+                 logger.error(f"Error editing preview message: {e}")
+                 # Send as new message if edit fails
+                 await send_message_with_retry(context.bot, chat_id, msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
              else: await query.answer() # Ignore modification error
     else:
         # Send as new message if no original message to edit
-        await send_message_with_retry(context.bot, chat_id, msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2)
+        await send_message_with_retry(context.bot, chat_id, msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
     if query:
         await query.answer()
@@ -2545,8 +2548,7 @@ async def handle_confirm_save_welcome(update: Update, context: ContextTypes.DEFA
     template_description = pending_template.get('description') # Can be None
     is_editing = pending_template.get('is_editing', False)
     offset = pending_template.get('offset', 0)
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     # Perform the actual save operation
     success = False
@@ -2896,8 +2898,7 @@ async def handle_adm_add_type_message(update: Update, context: ContextTypes.DEFA
     """Handles text reply when state is 'awaiting_new_type_name'."""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     if user_id != ADMIN_ID: return
     if not update.message or not update.message.text: return
@@ -2920,8 +2921,7 @@ async def handle_adm_add_type_emoji_message(update: Update, context: ContextType
     """Handles the emoji reply when state is 'awaiting_new_type_emoji'."""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     if user_id != ADMIN_ID: return
     if not update.message or not update.message.text: return
@@ -2976,8 +2976,7 @@ async def handle_adm_edit_type_emoji_message(update: Update, context: ContextTyp
     """Handles the emoji reply when state is 'awaiting_edit_type_emoji'."""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     if user_id != ADMIN_ID: return
     if not update.message or not update.message.text: return
@@ -3138,8 +3137,7 @@ async def handle_adm_broadcast_inactive_days_message(update: Update, context: Co
     if context.user_data.get("state") != 'awaiting_broadcast_inactive_days': return
     if not update.message or not update.message.text: return
 
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
     invalid_days_msg = lang_data.get("broadcast_invalid_days", "❌ Invalid number of days. Please enter a positive whole number.")
     days_too_large_msg = lang_data.get("broadcast_days_too_large", "❌ Number of days is too large. Please enter a smaller number.")
 
@@ -3172,8 +3170,7 @@ async def handle_adm_broadcast_message(update: Update, context: ContextTypes.DEF
     if context.user_data.get("state") != 'awaiting_broadcast_message': return
     if not update.message: return
 
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     text = (update.message.text or update.message.caption or "").strip()
     media_file_id, media_type = None, None
@@ -3224,8 +3221,7 @@ async def handle_adm_welcome_template_name_message(update: Update, context: Cont
     if not update.message or not update.message.text: return
 
     template_name = update.message.text.strip()
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     if not template_name or len(template_name) > 50 or '|' in template_name:
         await send_message_with_retry(context.bot, chat_id, "❌ Invalid name. Please use a short, unique name without '|' (max 50 chars).")
@@ -3244,12 +3240,10 @@ async def handle_adm_welcome_template_name_message(update: Update, context: Cont
 
     placeholders = "`{username}`, `{status}`, `{progress_bar}`, `{balance_str}`, `{purchases}`, `{basket_count}`"
     prompt_template = lang_data.get("welcome_add_text_prompt", "Template Name: {name}\n\nPlease reply with the full welcome message text. Available placeholders:\n{placeholders}")
-    # <<< FIX: Escape name before formatting >>>
-    prompt = prompt_template.format(name=helpers.escape_markdown(template_name, version=2), placeholders=placeholders)
+    prompt = prompt_template.format(name=template_name, placeholders=placeholders.replace('`','')) # Plain text display
     keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_welcome|0")]] # Back to first page
 
-    # <<< FIX: Change parse_mode to None for reliability >>>
-    await send_message_with_retry(context.bot, chat_id, prompt.replace('`', ''), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    await send_message_with_retry(context.bot, chat_id, prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
 async def handle_adm_welcome_template_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles admin entering the text for a new/edited welcome template."""
@@ -3260,8 +3254,7 @@ async def handle_adm_welcome_template_text_message(update: Update, context: Cont
     if not update.message or not update.message.text: return
 
     template_text = update.message.text # Keep raw text
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
 
     if len(template_text) > 3500: # Keep below Telegram limit
         await send_message_with_retry(context.bot, chat_id, "❌ Template text too long (max ~3500 chars). Please shorten it.")
@@ -3399,6 +3392,5 @@ async def handle_adm_welcome_description_edit_message(update: Update, context: C
 # --- Admin Message Handlers (Existing - Kept for completeness) ---
 # These handlers are mapped in main.py's STATE_HANDLERS dictionary
 
-# ... (Keep existing message handlers: handle_adm_add_city_message, handle_adm_add_district_message, handle_adm_edit_district_message, handle_adm_edit_city_message, handle_adm_custom_size_message, handle_adm_price_message, handle_adm_bot_media_message, handle_adm_add_type_message, handle_adm_add_type_emoji_message, handle_adm_edit_type_emoji_message, handle_adm_discount_code_message, handle_adm_discount_value_message, handle_adm_broadcast_inactive_days_message, handle_adm_broadcast_message) ...
-
+# --- END OF FILE admin.py ---
 
