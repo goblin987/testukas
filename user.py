@@ -1,4 +1,3 @@
-
 import sqlite3
 import time
 import logging
@@ -54,9 +53,6 @@ EMOJI_SHOP = "🛍️"
 EMOJI_DISCOUNT = "🏷️"
 
 
-# --- REMOVED: _get_lang_data function moved to utils.py ---
-
-
 # --- Helper Function to Build Start Menu ---
 def _build_start_menu_content(user_id: int, username: str, lang_data: dict, context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup]:
     """Builds the text and keyboard for the start menu using provided lang_data."""
@@ -101,7 +97,6 @@ def _build_start_menu_content(user_id: int, username: str, lang_data: dict, cont
     # --- Determine which template text to use ---
     welcome_template_to_use = None # Start with None
 
-    # <<< FIX: Always try to load the active template from DB >>>
     if active_template_name_from_db: # Only try if we have a name (even if it's 'default')
         conn_load = None
         try:
@@ -125,7 +120,6 @@ def _build_start_menu_content(user_id: int, username: str, lang_data: dict, cont
     if welcome_template_to_use is None:
         logger.warning("Falling back to default welcome message defined in LANGUAGES.")
         welcome_template_to_use = lang_data.get('welcome', DEFAULT_WELCOME_MESSAGE) # Use language file default OR hardcoded default
-    # <<< END FIX >>>
 
     # --- Format the chosen template ---
     status = get_user_status(purchases)
@@ -133,29 +127,23 @@ def _build_start_menu_content(user_id: int, username: str, lang_data: dict, cont
     progress_bar_str = get_progress_bar(purchases)
 
     try:
-        # Escape username just in case, though it's usually safe from Telegram
-        # Don't escape the placeholders themselves, they contain the values
+        # Format using the raw username and placeholders
         full_welcome = welcome_template_to_use.format(
-            username=username, # Pass raw username for format
+            username=username,
             status=status,
             progress_bar=progress_bar_str,
             balance_str=balance_str,
             purchases=purchases,
             basket_count=basket_count
-            # Add any other placeholders you might want to support here
         )
-        # Note: If the template itself contains markdown, it should be handled here or assumed parse_mode=None below
-
     except KeyError as e:
         logger.error(f"Placeholder error formatting welcome message template. Missing key: {e}. Template: '{welcome_template_to_use[:100]}...' Using fallback.")
-        # Fallback to a very basic message if formatting fails
         full_welcome = f"👋 Welcome, {username}!\n\n💰 Balance: {balance_str} EUR"
     except Exception as format_e:
         logger.error(f"Unexpected error formatting welcome message: {format_e}. Template: '{welcome_template_to_use[:100]}...' Using fallback.")
         full_welcome = f"👋 Welcome, {username}!\n\n💰 Balance: {balance_str} EUR"
 
-
-    # --- Build Keyboard (Remains the same) ---
+    # --- Build Keyboard ---
     shop_button_text = lang_data.get("shop_button", "Shop")
     profile_button_text = lang_data.get("profile_button", "Profile")
     top_up_button_text = lang_data.get("top_up_button", "Top Up")
@@ -1469,10 +1457,12 @@ async def handle_language_selection(update: Update, context: ContextTypes.DEFAUL
                 language_set_answer = new_lang_data.get("language_set_answer", "Language set!")
                 await query.answer(language_set_answer.format(lang=new_lang.upper()))
 
+                # <<< FIX: Rebuild and edit start menu >>>
                 logger.info(f"Rebuilding start menu in {new_lang} for user {user_id}")
                 start_menu_text, start_menu_markup = _build_start_menu_content(user_id, username, new_lang_data, context)
                 await query.edit_message_text(start_menu_text, reply_markup=start_menu_markup, parse_mode=None)
                 logger.info(f"Successfully edited message to show start menu in {new_lang}")
+                # <<< END FIX >>>
 
             except sqlite3.Error as e:
                 logger.error(f"DB error updating language user {user_id}: {e}");
