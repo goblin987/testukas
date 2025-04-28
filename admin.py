@@ -216,9 +216,6 @@ async def _process_collected_media(context: ContextTypes.DEFAULT_TYPE):
     # Ensure user_data is accessed correctly via application
     user_data = context.application.user_data.get(user_id, {}) # <<< MODIFIED HERE
     if not user_data:
-         # Check bot_data as a fallback if context structure is unusual, though user_data is standard
-         # user_data = context.bot_data.get(user_id, {}) # <<< Potential Fallback
-         # if not user_data:
          logger.error(f"Job {media_group_id}: Could not find user_data for user {user_id}.")
          return # <<< Exit if no user_data found
 
@@ -717,8 +714,7 @@ async def handle_confirm_add_drop(update: Update, context: ContextTypes.DEFAULT_
     user_id = query.from_user.id
     if user_id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
     chat_id = query.message.chat_id
-    # Ensure user_data is accessed correctly via application
-    user_specific_data = context.application.user_data.get(user_id, {}) # <<< MODIFIED HERE
+    user_specific_data = context.application.user_data.get(user_id, {})
     pending_drop = user_specific_data.get("pending_drop")
 
     if not pending_drop:
@@ -726,14 +722,9 @@ async def handle_confirm_add_drop(update: Update, context: ContextTypes.DEFAULT_
         user_specific_data.pop("state", None)
         return await query.edit_message_text("❌ Error: No pending drop data found. Please start again.", parse_mode=None)
 
-    city = pending_drop.get("city")
-    district = pending_drop.get("district")
-    p_type = pending_drop.get("product_type")
-    size = pending_drop.get("size")
-    price = pending_drop.get("price")
-    original_text = pending_drop.get("original_text", "")
-    media_list = pending_drop.get("media", [])
-    temp_dir = pending_drop.get("temp_dir")
+    city = pending_drop.get("city"); district = pending_drop.get("district"); p_type = pending_drop.get("product_type")
+    size = pending_drop.get("size"); price = pending_drop.get("price"); original_text = pending_drop.get("original_text", "")
+    media_list = pending_drop.get("media", []); temp_dir = pending_drop.get("temp_dir")
 
     if not all([city, district, p_type, size, price is not None]):
         logger.error(f"Missing data in pending_drop for user {user_id}: {pending_drop}")
@@ -742,77 +733,38 @@ async def handle_confirm_add_drop(update: Update, context: ContextTypes.DEFAULT_
         for key in keys_to_clear: user_specific_data.pop(key, None)
         return await query.edit_message_text("❌ Error: Incomplete drop data. Please start again.", parse_mode=None)
 
-    product_name = f"{p_type} {size} {int(time.time())}"
-    conn = None
-    product_id = None
+    product_name = f"{p_type} {size} {int(time.time())}"; conn = None; product_id = None
     try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("BEGIN")
-        c.execute(
-            """INSERT INTO products
-                (city, district, product_type, size, name, price, available, reserved, original_text, added_by, added_date)
-                VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)""",
-            (city, district, p_type, size, product_name, price, original_text, ADMIN_ID, datetime.now(timezone.utc).isoformat()) # Use UTC time
-        )
+        conn = get_db_connection(); c = conn.cursor(); c.execute("BEGIN")
+        c.execute("""INSERT INTO products (city, district, product_type, size, name, price, available, reserved, original_text, added_by, added_date) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)""",
+                  (city, district, p_type, size, product_name, price, original_text, ADMIN_ID, datetime.now(timezone.utc).isoformat()))
         product_id = c.lastrowid
-
         if product_id and media_list and temp_dir:
-            final_media_dir = os.path.join(MEDIA_DIR, str(product_id))
-            await asyncio.to_thread(os.makedirs, final_media_dir, exist_ok=True)
-            logger.info(f"Created/verified final media directory: {final_media_dir}")
-            media_inserts = []
+            final_media_dir = os.path.join(MEDIA_DIR, str(product_id)); await asyncio.to_thread(os.makedirs, final_media_dir, exist_ok=True); media_inserts = []
             for media_item in media_list:
                 if "path" in media_item and "type" in media_item and "file_id" in media_item:
                     temp_file_path = media_item["path"]
                     if await asyncio.to_thread(os.path.exists, temp_file_path):
-                        new_filename = os.path.basename(temp_file_path)
-                        final_persistent_path = os.path.join(final_media_dir, new_filename)
-                        try:
-                            await asyncio.to_thread(shutil.move, temp_file_path, final_persistent_path)
-                            media_inserts.append((product_id, media_item["type"], final_persistent_path, media_item["file_id"]))
-                            logger.info(f"Moved media file to {final_persistent_path}")
-                        except OSError as move_err:
-                            logger.error(f"Error moving media file {temp_file_path} to {final_persistent_path}: {move_err}")
-                    else:
-                        logger.warning(f"Media file not found at temp path: {temp_file_path}")
-                else:
-                    logger.warning(f"Incomplete media item data: {media_item}")
-            if media_inserts:
-                c.executemany(
-                    "INSERT INTO product_media (product_id, media_type, file_path, telegram_file_id) VALUES (?, ?, ?, ?)",
-                    media_inserts
-                )
-        conn.commit()
-        logger.info(f"Successfully added product {product_id} ({product_name}) to database.")
-
-        if temp_dir and await asyncio.to_thread(os.path.exists, temp_dir):
-            await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
-            logger.info(f"Cleaned up temporary directory: {temp_dir}")
-
+                        new_filename = os.path.basename(temp_file_path); final_persistent_path = os.path.join(final_media_dir, new_filename)
+                        try: await asyncio.to_thread(shutil.move, temp_file_path, final_persistent_path); media_inserts.append((product_id, media_item["type"], final_persistent_path, media_item["file_id"]))
+                        except OSError as move_err: logger.error(f"Error moving media {temp_file_path}: {move_err}")
+                    else: logger.warning(f"Temp media not found: {temp_file_path}")
+                else: logger.warning(f"Incomplete media item: {media_item}")
+            if media_inserts: c.executemany("INSERT INTO product_media (product_id, media_type, file_path, telegram_file_id) VALUES (?, ?, ?, ?)", media_inserts)
+        conn.commit(); logger.info(f"Added product {product_id} ({product_name}).")
+        if temp_dir and await asyncio.to_thread(os.path.exists, temp_dir): await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True); logger.info(f"Cleaned temp dir: {temp_dir}")
         await query.edit_message_text("✅ Drop Added Successfully!", parse_mode=None)
-
-        ctx_city_id = user_specific_data.get('admin_city_id')
-        ctx_dist_id = user_specific_data.get('admin_district_id')
-        ctx_p_type = user_specific_data.get('admin_product_type')
+        ctx_city_id = user_specific_data.get('admin_city_id'); ctx_dist_id = user_specific_data.get('admin_district_id'); ctx_p_type = user_specific_data.get('admin_product_type')
         add_another_callback = f"adm_add|{ctx_city_id}|{ctx_dist_id}|{ctx_p_type}" if all([ctx_city_id, ctx_dist_id, ctx_p_type]) else "admin_menu"
-
-        keyboard = [
-            [InlineKeyboardButton("➕ Add Another Same Type", callback_data=add_another_callback)],
-            [InlineKeyboardButton("🔧 Admin Menu", callback_data="admin_menu"),
-             InlineKeyboardButton("🏠 User Home", callback_data="back_start")]
-        ]
+        keyboard = [ [InlineKeyboardButton("➕ Add Another Same Type", callback_data=add_another_callback)],
+                     [InlineKeyboardButton("🔧 Admin Menu", callback_data="admin_menu"), InlineKeyboardButton("🏠 User Home", callback_data="back_start")] ]
         await send_message_with_retry(context.bot, chat_id, "What next?", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
     except (sqlite3.Error, OSError, Exception) as e:
-        try:
-            if conn and conn.in_transaction: conn.rollback()
-        except Exception as rb_err: logger.error(f"Rollback failed during drop add error handling: {rb_err}")
+        try: conn.rollback() if conn and conn.in_transaction else None
+        except Exception as rb_err: logger.error(f"Rollback failed: {rb_err}")
         logger.error(f"Error saving confirmed drop for user {user_id}: {e}", exc_info=True)
         await query.edit_message_text("❌ Error: Failed to save the drop. Please check logs and try again.", parse_mode=None)
-        if temp_dir and await asyncio.to_thread(os.path.exists, temp_dir):
-            await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
-            logger.info(f"Cleaned up temporary directory after error: {temp_dir}")
+        if temp_dir and await asyncio.to_thread(os.path.exists, temp_dir): await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True); logger.info(f"Cleaned temp dir after error: {temp_dir}")
     finally:
         if conn: conn.close()
         keys_to_clear = ["state", "pending_drop", "pending_drop_size", "pending_drop_price"]
@@ -823,52 +775,24 @@ async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE, params=
     """Cancels the add product flow and cleans up."""
     query = update.callback_query
     user_id = update.effective_user.id
-    # Ensure user_data is accessed correctly via application
-    user_specific_data = context.application.user_data.get(user_id, {}) # <<< MODIFIED HERE
+    user_specific_data = context.application.user_data.get(user_id, {})
     pending_drop = user_specific_data.get("pending_drop")
-
     if pending_drop and "temp_dir" in pending_drop and pending_drop["temp_dir"]:
         temp_dir_path = pending_drop["temp_dir"]
         if await asyncio.to_thread(os.path.exists, temp_dir_path):
-            try:
-                await asyncio.to_thread(shutil.rmtree, temp_dir_path, ignore_errors=True)
-                logger.info(f"Cleaned up temp dir on cancel: {temp_dir_path}")
-            except Exception as e:
-                logger.error(f"Error cleaning up temp dir {temp_dir_path} on cancel: {e}")
-
-    keys_to_clear = [
-        "state", "pending_drop", "pending_drop_size", "pending_drop_price",
-        "admin_city_id", "admin_district_id", "admin_product_type",
-        "admin_city", "admin_district",
-        "collecting_media_group_id", "collected_media"
-    ]
-    for key in keys_to_clear:
-        user_specific_data.pop(key, None)
-
+            try: await asyncio.to_thread(shutil.rmtree, temp_dir_path, ignore_errors=True); logger.info(f"Cleaned temp dir on cancel: {temp_dir_path}")
+            except Exception as e: logger.error(f"Error cleaning temp dir {temp_dir_path}: {e}")
+    keys_to_clear = ["state", "pending_drop", "pending_drop_size", "pending_drop_price", "admin_city_id", "admin_district_id", "admin_product_type", "admin_city", "admin_district", "collecting_media_group_id", "collected_media"]
+    for key in keys_to_clear: user_specific_data.pop(key, None)
     if 'collecting_media_group_id' in user_specific_data:
         media_group_id = user_specific_data.pop('collecting_media_group_id', None)
-        if media_group_id:
-            job_name = f"process_media_group_{user_id}_{media_group_id}"
-            remove_job_if_exists(job_name, context)
-
+        if media_group_id: job_name = f"process_media_group_{user_id}_{media_group_id}"; remove_job_if_exists(job_name, context)
     if query:
-         try:
-            await query.edit_message_text("❌ Add Product Cancelled", parse_mode=None)
-         except telegram_error.BadRequest as e:
-             if "message is not modified" not in str(e).lower(): logger.error(f"Error editing cancel message: {e}")
-             else: pass
-         keyboard = [[InlineKeyboardButton("🔧 Admin Menu", callback_data="admin_menu"),
-                      InlineKeyboardButton("🏠 User Home", callback_data="back_start")]]
-         await send_message_with_retry(
-             context.bot, query.message.chat_id,
-             "Returning to Admin Menu.",
-             reply_markup=InlineKeyboardMarkup(keyboard),
-             parse_mode=None
-         )
-    elif update.message:
-         await send_message_with_retry(context.bot, update.message.chat_id, "Add product cancelled.", parse_mode=None)
-    else:
-         logger.info("Add product flow cancelled internally (no query/message object).")
+         try: await query.edit_message_text("❌ Add Product Cancelled", parse_mode=None)
+         except telegram_error.BadRequest as e: pass if "message is not modified" in str(e).lower() else logger.error(f"Error editing cancel message: {e}")
+         keyboard = [[InlineKeyboardButton("🔧 Admin Menu", callback_data="admin_menu"), InlineKeyboardButton("🏠 User Home", callback_data="back_start")]]; await send_message_with_retry(context.bot, query.message.chat_id, "Returning to Admin Menu.", reply_markup=InlineKeyboardMarkup(keyboard))
+    elif update.message: await send_message_with_retry(context.bot, update.message.chat_id, "Add product cancelled.")
+    else: logger.info("Add product flow cancelled internally (no query/message object).")
 
 
 # --- Manage Geography Handlers ---
@@ -1170,19 +1094,24 @@ async def handle_adm_manage_products_type(update: Update, context: ContextTypes.
         products = c.fetchall()
         msg = f"🗑️ Products: {type_emoji} {p_type} in {city_name} / {district_name}\n\n"
         keyboard = []
+        full_msg = msg # Initialize full message
+
         if not products:
-            msg += "No products of this type found here."
+            full_msg += "No products of this type found here."
         else:
-             msg += "ID | Size | Price | Status (Avail/Reserved)\n"
-             msg += "----------------------------------------\n"
+             header = "ID | Size | Price | Status (Avail/Reserved)\n" + "----------------------------------------\n"
+             full_msg += header
+             items_text_list = []
              for prod in products:
                 prod_id, size_str, price_str = prod['id'], prod['size'], format_currency(prod['price'])
                 status_str = f"{prod['available']}/{prod['reserved']}"
-                msg += f"{prod_id} | {size_str} | {price_str}€ | {status_str}\n"
+                items_text_list.append(f"{prod_id} | {size_str} | {price_str}€ | {status_str}")
                 keyboard.append([InlineKeyboardButton(f"🗑️ Delete ID {prod_id}", callback_data=f"adm_delete_prod|{prod_id}")])
+             full_msg += "\n".join(items_text_list)
+
         keyboard.append([InlineKeyboardButton("⬅️ Back to Types", callback_data=f"adm_manage_products_dist|{city_id}|{dist_id}")])
         try:
-            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+            await query.edit_message_text(full_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
         except telegram_error.BadRequest as e:
              if "message is not modified" not in str(e).lower(): logger.error(f"Error editing manage products type: {e}.")
              else: await query.answer() # Acknowledge if not modified
@@ -1272,7 +1201,6 @@ async def handle_adm_edit_type_menu(update: Update, context: ContextTypes.DEFAUL
     # Fetch current description (This part seems incorrect in original, product types don't have desc)
     current_description = "(Description not applicable for Product Types)" # Placeholder
 
-    # <<< FIX: Escape name and description before using in Markdown >>>
     safe_name = type_name # No Markdown V2 here
     safe_desc = current_description # No Markdown V2 here
 
@@ -1290,7 +1218,6 @@ async def handle_adm_edit_type_menu(update: Update, context: ContextTypes.DEFAUL
     ]
 
     try:
-        # <<< FIX: Change parse_mode to None to avoid errors >>>
         await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
     except telegram_error.BadRequest as e:
         if "message is not modified" in str(e).lower(): await query.answer()
@@ -2022,28 +1949,7 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
                  success_msg = f"✅ Welcome template '{name_to_delete}' deleted!"
                  next_callback = "adm_manage_welcome|0" # Go back to first page
             else: conn.rollback(); success_msg = f"❌ Error: Welcome template '{name_to_delete}' not found."
-        # <<< Reset Welcome Message Logic >>>
-        elif action_type == "reset_default_welcome":
-            lang_data_en = LANGUAGES.get('en', {}) # Use English for internal messages and default text
-            default_text = lang_data_en.get('welcome', DEFAULT_WELCOME_MESSAGE) # Use default from English or hardcoded
-            # Update the text in the DB
-            update_res = c.execute("UPDATE welcome_messages SET template_text = ?, description = ? WHERE name = ?",
-                                   (default_text, "Built-in default message (EN)", "default"))
-            if update_res.rowcount == 0:
-                 logger.warning("Could not find 'default' template to reset. Trying to insert.")
-                 # Attempt to insert if it wasn't there
-                 c.execute("INSERT OR IGNORE INTO welcome_messages (name, template_text, description) VALUES (?, ?, ?)",
-                           ("default", default_text, "Built-in default message (EN)"))
-
-            # Activate it
-            c.execute("INSERT OR REPLACE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
-                      ("active_welcome_message_name", "default"))
-            conn.commit()
-            # Use language from user_data for the success message display
-            user_lang, display_lang_data = _get_lang_data(context) # Use helper
-            success_msg = display_lang_data.get("welcome_reset_success", "✅ 'default' template reset and activated.")
-            next_callback = "adm_manage_welcome|0"
-        # <<< End Welcome Message Logic >>>
+        # <<< Reset Welcome Message Logic REMOVED >>>
         else: # Unknown action type
             logger.error(f"Unknown confirmation action type: {action_type}")
             conn.rollback()
@@ -2147,12 +2053,9 @@ async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAUL
             msg_parts.append(f"\n{escaped_page_indicator}")
 
 
-    # Add "Add New", "Reset Default", and "Back" buttons
+    # Add "Add New" and "Back" buttons (Reset removed)
     keyboard.append([InlineKeyboardButton(lang_data.get("welcome_button_add_new", "➕ Add New Template"), callback_data="adm_add_welcome_start")])
-    # Add Reset button only if 'default' template exists
-    templates_dict = {t['name']: t for t in get_welcome_message_templates()} # Fetch again to be sure
-    if "default" in templates_dict:
-         keyboard.append([InlineKeyboardButton(lang_data.get("welcome_button_reset_default", "🔄 Reset to Built-in Default"), callback_data="adm_reset_default_confirm")])
+    # <<< REMOVED Reset Button Logic >>>
     keyboard.append([InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="admin_menu")])
 
     final_msg = "".join(msg_parts)
@@ -2165,10 +2068,6 @@ async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAUL
         if "message is not modified" not in str(e).lower():
             logger.error(f"Error editing welcome management menu (Markdown V2): {e}. Message: {final_msg[:500]}...") # Log snippet
             # Fallback to plain text
-            # More robust unescaping for fallback
-            plain_msg = helpers.escape_markdown(final_msg, version=2) # First escape *everything*
-            plain_msg = plain_msg.replace("\\*", "*").replace("\\_", "_").replace("\\`", "`") # Unescape only intended markdown if needed, or remove all
-            # Simpler fallback: remove all markdown chars
             plain_msg_fallback = final_msg
             for char in ['*', '_', '`', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']:
                 plain_msg_fallback = plain_msg_fallback.replace(f'\\{char}', char) # Remove escapes first
@@ -2278,7 +2177,6 @@ async def handle_adm_edit_welcome(update: Update, context: ContextTypes.DEFAULT_
         logger.error(f"Unexpected error in handle_adm_edit_welcome: {e}")
         await query.answer("Error displaying edit menu.", show_alert=True)
 
-# <<< NEW >>>
 async def handle_adm_edit_welcome_text(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     """Initiates editing the template text."""
     query = update.callback_query
@@ -2325,7 +2223,6 @@ async def handle_adm_edit_welcome_text(update: Update, context: ContextTypes.DEF
         else: await query.answer()
     await query.answer("Enter new template text.")
 
-# <<< NEW >>>
 async def handle_adm_edit_welcome_desc(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     """Initiates editing the template description."""
     query = update.callback_query
@@ -2402,23 +2299,7 @@ async def handle_adm_delete_welcome_confirm(update: Update, context: ContextType
     ]
     await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
-# <<< NEW >>>
-async def handle_reset_default_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Confirms resetting the default welcome message."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
-    lang, lang_data = _get_lang_data(context) # Use helper
-
-    context.user_data["confirm_action"] = "reset_default_welcome" # This key should already be handled by confirm_yes
-    title = lang_data.get("welcome_reset_confirm_title", "⚠️ Confirm Reset")
-    text = lang_data.get("welcome_reset_confirm_text", "Are you sure you want to reset the text of the 'default' template to the built-in version and activate it?")
-    button_yes = lang_data.get("welcome_reset_button_yes", "✅ Yes, Reset & Activate")
-
-    keyboard = [
-        [InlineKeyboardButton(button_yes, callback_data="confirm_yes")], # Goes to the generic confirmation handler
-        [InlineKeyboardButton("❌ No, Cancel", callback_data="adm_manage_welcome|0")]
-    ]
-    await query.edit_message_text(f"{title}\n\n{text}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+# <<< REMOVED handle_reset_default_welcome function definition >>>
 
 # --- Welcome Message Management Handlers --- END
 
