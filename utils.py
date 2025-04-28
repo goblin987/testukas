@@ -753,7 +753,7 @@ def init_db():
                 template_text TEXT NOT NULL
             )''')
 
-            # <<< NEW: Add initial welcome message templates >>>
+            # <<< MODIFICATION: Add initial welcome message templates >>>
             initial_templates = [
                 ("default", LANGUAGES['en']['welcome']), # Ensure built-in default exists
                 ("clean", "👋 Hello, {username}!\n\n💰 Balance: {balance_str} EUR\n⭐ Status: {status}\n🛒 Basket: {basket_count} item(s)\n\nReady to shop or manage your profile? Explore the options below! 👇\n\n⚠️ Note: No refunds."),
@@ -765,18 +765,23 @@ def init_db():
             inserted_count = 0
             for name, text in initial_templates:
                 try:
-                    c.execute("INSERT INTO welcome_messages (name, template_text) VALUES (?, ?)", (name, text))
-                    inserted_count += 1
-                except sqlite3.IntegrityError:
-                    pass # Ignore if template name already exists
+                    # Use INSERT OR IGNORE to avoid errors if templates already exist
+                    c.execute("INSERT OR IGNORE INTO welcome_messages (name, template_text) VALUES (?, ?)", (name, text))
+                    if c.lastrowid != 0: # Check if a row was actually inserted
+                        inserted_count += 1
+                except sqlite3.Error as insert_e: # Catch potential errors during insert
+                    logger.error(f"Error inserting template '{name}': {insert_e}")
+
             if inserted_count > 0:
-                logger.info(f"Inserted {inserted_count} initial welcome message templates.")
+                logger.info(f"Checked/Inserted {inserted_count} initial welcome message templates.")
+            else:
+                logger.info("Initial welcome message templates already exist or failed to insert.")
 
             # Set default as active if setting doesn't exist
             c.execute("INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
                       ("active_welcome_message_name", "default"))
             logger.info("Ensured 'default' is set as active welcome message in settings if not already set.")
-            # <<< END NEW >>>
+            # <<< END MODIFICATION >>>
 
             # Create Indices
             c.execute("CREATE INDEX IF NOT EXISTS idx_product_media_product_id ON product_media(product_id)")
@@ -1436,7 +1441,7 @@ def set_active_welcome_message(name: str) -> bool:
 
 
 # --- Initial Data Load ---
-init_db()
-load_all_data()
+init_db() # Call init_db first to ensure tables and initial templates exist
+load_all_data() # Then load dynamic data like cities/districts
 
 # --- END OF FILE utils.py ---
