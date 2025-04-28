@@ -753,17 +753,30 @@ def init_db():
                 template_text TEXT NOT NULL
             )''')
 
-            # <<< INSERT Default Welcome Message if table is empty >>>
-            c.execute("SELECT COUNT(*) FROM welcome_messages")
-            if c.fetchone()[0] == 0:
-                c.execute("INSERT INTO welcome_messages (name, template_text) VALUES (?, ?)",
-                          ("default", DEFAULT_WELCOME_MESSAGE))
-                logger.info("Inserted default welcome message template.")
-                # Set default as active if setting doesn't exist
-                c.execute("INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
-                          ("active_welcome_message_name", "default"))
-                logger.info("Set 'default' as active welcome message in settings.")
+            # <<< NEW: Add initial welcome message templates >>>
+            initial_templates = [
+                ("default", LANGUAGES['en']['welcome']), # Ensure built-in default exists
+                ("clean", "👋 Hello, {username}!\n\n💰 Balance: {balance_str} EUR\n⭐ Status: {status}\n🛒 Basket: {basket_count} item(s)\n\nReady to shop or manage your profile? Explore the options below! 👇\n\n⚠️ Note: No refunds."),
+                ("enthusiastic", "✨ Welcome back, {username}! ✨\n\nReady for more? You've got **{balance_str} EUR** to spend! 💸\nYour basket ({basket_count} items) is waiting for you! 🛒\n\nYour current status: {status} {progress_bar}\nTotal Purchases: {purchases}\n\n👇 Dive back into the shop or check your profile! 👇\n\n⚠️ Note: No refunds."),
+                ("status_focus", "👑 Welcome, {username}! ({status}) 👑\n\nTrack your journey: {progress_bar}\nTotal Purchases: {purchases}\n\n💰 Balance: {balance_str} EUR\n🛒 Basket: {basket_count} item(s)\n\nManage your profile or explore the shop! 👇\n\n⚠️ Note: No refunds."),
+                ("minimalist", "Welcome, {username}.\n\nBalance: {balance_str} EUR\nBasket: {basket_count}\nStatus: {status}\n\nUse the menu below to navigate.\n\n⚠️ Note: No refunds."),
+                ("basket_focus", "Welcome back, {username}!\n\n🛒 You have **{basket_count} item(s)** in your basket! Don't forget about them!\n💰 Balance: {balance_str} EUR\n⭐ Status: {status} ({purchases} total purchases)\n\nCheck out your basket, keep shopping, or top up! 👇\n\n⚠️ Note: No refunds.")
+            ]
+            inserted_count = 0
+            for name, text in initial_templates:
+                try:
+                    c.execute("INSERT INTO welcome_messages (name, template_text) VALUES (?, ?)", (name, text))
+                    inserted_count += 1
+                except sqlite3.IntegrityError:
+                    pass # Ignore if template name already exists
+            if inserted_count > 0:
+                logger.info(f"Inserted {inserted_count} initial welcome message templates.")
 
+            # Set default as active if setting doesn't exist
+            c.execute("INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
+                      ("active_welcome_message_name", "default"))
+            logger.info("Ensured 'default' is set as active welcome message in settings if not already set.")
+            # <<< END NEW >>>
 
             # Create Indices
             c.execute("CREATE INDEX IF NOT EXISTS idx_product_media_product_id ON product_media(product_id)")
@@ -1018,7 +1031,7 @@ async def send_message_with_retry(
     logger.error(f"Failed to send message to {chat_id} after {max_retries} attempts: {text[:100]}..."); return None
 
 def get_date_range(period_key):
-    now = datetime.now()
+    now = datetime.now(timezone.utc) # Use UTC now
     try:
         if period_key == 'today': start = now.replace(hour=0, minute=0, second=0, microsecond=0); end = now
         elif period_key == 'yesterday': yesterday = now - timedelta(days=1); start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0); end = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
@@ -1028,10 +1041,10 @@ def get_date_range(period_key):
         elif period_key == 'last_month': first_of_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0); end_of_last_month = first_of_this_month - timedelta(microseconds=1); start = end_of_last_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0); end = end_of_last_month.replace(hour=23, minute=59, second=59, microsecond=999999)
         elif period_key == 'year': start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0); end = now
         else: return None, None
-        if start.tzinfo is None: start = start.astimezone()
-        if end.tzinfo is None: end = end.astimezone()
-        return start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
+        # Return ISO format strings (already in UTC)
+        return start.isoformat(), end.isoformat()
     except Exception as e: logger.error(f"Error calculating date range for '{period_key}': {e}"); return None, None
+
 
 def get_user_status(purchases):
     try:
@@ -1121,7 +1134,7 @@ def clear_all_expired_baskets():
 def fetch_last_purchases(user_id, limit=10):
     try:
         with get_db_connection() as conn:
-            c = conn.cursor(); c.execute("SELECT purchase_date, product_name, product_size, price_paid FROM purchases WHERE user_id = ? ORDER BY purchase_date DESC LIMIT ?", (user_id, limit))
+            c = conn.cursor(); c.execute("SELECT purchase_date, product_name, product_type, product_size, price_paid FROM purchases WHERE user_id = ? ORDER BY purchase_date DESC LIMIT ?", (user_id, limit))
             return [dict(row) for row in c.fetchall()]
     except sqlite3.Error as e: logger.error(f"DB error fetching purchase history user {user_id}: {e}", exc_info=True); return []
 
@@ -1163,7 +1176,12 @@ def get_nowpayments_min_amount(currency_code: str) -> Decimal | None:
 
 def format_expiration_time(expiration_date_str: str | None) -> str:
     if not expiration_date_str: return "N/A"
-    try: dt_obj = datetime.fromisoformat(expiration_date_str); return dt_obj.strftime("%H:%M:%S %Z")
+    try:
+        # Ensure the string ends with timezone info for fromisoformat
+        if not expiration_date_str.endswith('Z') and '+' not in expiration_date_str and '-' not in expiration_date_str[10:]:
+            expiration_date_str += 'Z' # Assume UTC if no timezone
+        dt_obj = datetime.fromisoformat(expiration_date_str.replace('Z', '+00:00'))
+        return dt_obj.strftime("%H:%M:%S %Z")
     except (ValueError, TypeError) as e: logger.warning(f"Could not parse expiration date string '{expiration_date_str}': {e}"); return "Invalid Date"
 
 
