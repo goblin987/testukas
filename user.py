@@ -25,7 +25,8 @@ from utils import (
     get_db_connection, MEDIA_DIR, # Import helper and MEDIA_DIR
     DEFAULT_PRODUCT_EMOJI, # Import default emoji
     load_active_welcome_message, # <<< Import welcome message loader (though we'll modify its usage)
-    DEFAULT_WELCOME_MESSAGE # <<< Import default welcome message fallback
+    DEFAULT_WELCOME_MESSAGE, # <<< Import default welcome message fallback
+    _get_lang_data # <<< IMPORT THE HELPER FROM UTILS >>>
 )
 import json # <<< Make sure json is imported
 import payment # <<< Make sure payment module is imported
@@ -53,27 +54,8 @@ EMOJI_SHOP = "🛍️"
 EMOJI_DISCOUNT = "🏷️"
 
 
-# --- Helper to get language data ---
-def _get_lang_data(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, dict]:
-    """Gets the current language code and corresponding language data dictionary."""
-    lang = context.user_data.get("lang", "en")
-    # Need LANGUAGES dictionary here, import it from utils if not already available globally
-    # This avoids circular import if utils needed user.py
-    try:
-        from utils import LANGUAGES as UTILS_LANGUAGES
-    except ImportError: # Fallback in case of issues
-        UTILS_LANGUAGES = {'en': {'welcome': 'Welcome!'}} # Minimal fallback
-        logger.error("Could not import LANGUAGES from utils in _get_lang_data")
+# --- REMOVED: _get_lang_data function moved to utils.py ---
 
-    logger.debug(f"_get_lang_data: Retrieved lang '{lang}' from context.user_data.")
-    lang_data = UTILS_LANGUAGES.get(lang, UTILS_LANGUAGES['en'])
-    if lang not in UTILS_LANGUAGES:
-        logger.warning(f"_get_lang_data: Language '{lang}' not found in LANGUAGES dict. Falling back to 'en'.")
-        lang = 'en' # Ensure lang variable reflects the fallback
-
-    keys_sample = list(lang_data.keys())[:5]
-    logger.debug(f"_get_lang_data: Returning lang '{lang}' and lang_data keys sample: {keys_sample}...")
-    return lang, lang_data
 
 # --- Helper Function to Build Start Menu ---
 def _build_start_menu_content(user_id: int, username: str, lang_data: dict, context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup]:
