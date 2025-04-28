@@ -1,3 +1,4 @@
+
 import sqlite3
 import time
 import logging
@@ -151,18 +152,17 @@ def _build_start_menu_content(user_id: int, username: str, lang_data: dict, cont
 
     try:
         # Escape username just in case, though it's usually safe from Telegram
-        escaped_username = helpers.escape_markdown(username, version=2)
         # Don't escape the placeholders themselves, they contain the values
         full_welcome = welcome_template_to_use.format(
-            username=escaped_username, # Use the escaped version
+            username=username, # Pass raw username for format
             status=status,
             progress_bar=progress_bar_str,
             balance_str=balance_str,
             purchases=purchases,
             basket_count=basket_count
             # Add any other placeholders you might want to support here
-        ).replace('\\*', '*').replace('\\_', '_').replace('\\`', '`') # Basic unescaping for allowed markdown in template
-        # Note: A more robust markdown parser might be needed if complex formatting is allowed in templates
+        )
+        # Note: If the template itself contains markdown, it should be handled here or assumed parse_mode=None below
 
     except KeyError as e:
         logger.error(f"Placeholder error formatting welcome message template. Missing key: {e}. Template: '{welcome_template_to_use[:100]}...' Using fallback.")
@@ -275,6 +275,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
              # Only edit if message content or markup has changed
              if query.message and (query.message.text != full_welcome or query.message.reply_markup != reply_markup):
+                  # Send with parse_mode=None as formatting is handled internally or should be plain
                   await query.edit_message_text(full_welcome, reply_markup=reply_markup, parse_mode=None)
              elif query: await query.answer() # Acknowledge if not modified
         except telegram_error.BadRequest as e:
@@ -287,6 +288,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
              await send_message_with_retry(context.bot, chat_id, full_welcome, reply_markup=reply_markup, parse_mode=None)
     else:
         # Send the main welcome message *after* attempting to send the media
+        # Send with parse_mode=None as formatting is handled internally or should be plain
         await send_message_with_retry(context.bot, chat_id, full_welcome, reply_markup=reply_markup, parse_mode=None)
 
 
@@ -405,7 +407,7 @@ async def handle_city_selection(update: Update, context: ContextTypes.DEFAULT_TY
                             escaped_price = helpers.escape_markdown(price_str, version=2)
                             escaped_qty = helpers.escape_markdown(str(prod['quantity']), version=2)
                             escaped_avail = helpers.escape_markdown(available_label_short, version=2)
-                            message_text_parts.append(f"  • {prod_emoji} {escaped_type} {escaped_size} \\({escaped_price}€\\) \\- {escaped_qty} {escaped_avail}\n")
+                            message_text_parts.append(f"  • {prod_emoji} {escaped_type} {escaped_size} \\({escaped_price}€\\) \\- {escaped_qty} {escaped_avail}\\n")
                         message_text_parts.append("\n") # Add space after district info
                         # Add district to list for button creation
                         districts_with_products_info.append((d_id, dist_name))
@@ -460,7 +462,7 @@ async def handle_city_selection(update: Update, context: ContextTypes.DEFAULT_TY
                     logger.error(f"Error editing district selection message (Markdown): {e}")
                     # Fallback to plain text if Markdown fails
                     try:
-                         plain_text_message = "".join(message_text_parts).replace('*','') # Basic removal of bold
+                         plain_text_message = "".join(message_text_parts).replace('*','').replace('\\','') # Basic removal of bold and escapes
                          if len(plain_text_message) > 4000: plain_text_message = plain_text_message[:4000] + "\n\n[... Message truncated ...]"
                          await query.edit_message_text(plain_text_message, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
                     except Exception as fallback_e:
@@ -705,7 +707,6 @@ async def handle_add_to_basket(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 # --- Profile Handlers ---
-# (handle_profile unchanged)
 async def handle_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
     user_id = query.from_user.id
@@ -750,7 +751,6 @@ async def handle_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, par
         if conn: conn.close()
 
 # --- Discount Validation (Synchronous) ---
-# (validate_discount_code unchanged)
 def validate_discount_code(code_text: str, current_total_float: float) -> tuple[bool, str, dict | None]:
     lang_data = LANGUAGES.get('en', {}) # Use English for internal messages
     no_code_msg = lang_data.get("no_code_provided", "No code provided.")
@@ -807,7 +807,6 @@ def validate_discount_code(code_text: str, current_total_float: float) -> tuple[
         if conn: conn.close()
 
 # --- Basket Handlers ---
-# (handle_view_basket unchanged)
 async def handle_view_basket(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
     user_id = query.from_user.id
@@ -920,7 +919,6 @@ async def handle_view_basket(update: Update, context: ContextTypes.DEFAULT_TYPE,
          if conn: conn.close()
 
 # --- Discount Application Handlers ---
-# (apply_discount_start unchanged)
 async def apply_discount_start(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
     user_id = query.from_user.id
@@ -937,7 +935,6 @@ async def apply_discount_start(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.edit_message_text(f"{EMOJI_DISCOUNT} {enter_code_prompt}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
     await query.answer(lang_data.get("enter_code_answer", "Enter code in chat."))
 
-# (remove_discount unchanged)
 async def remove_discount(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
     user_id = query.from_user.id
@@ -951,7 +948,6 @@ async def remove_discount(update: Update, context: ContextTypes.DEFAULT_TYPE, pa
     else: no_discount_answer = lang_data.get("no_discount_answer", "No discount applied."); await query.answer(no_discount_answer, show_alert=False)
     await handle_view_basket(update, context)
 
-# (handle_user_discount_code_message unchanged)
 async def handle_user_discount_code_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
@@ -1003,7 +999,6 @@ async def handle_user_discount_code_message(update: Update, context: ContextType
 
 
 # --- Remove From Basket ---
-# (handle_remove_from_basket unchanged)
 async def handle_remove_from_basket(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
     user_id = query.from_user.id
@@ -1072,7 +1067,6 @@ async def handle_remove_from_basket(update: Update, context: ContextTypes.DEFAUL
         if conn: conn.close()
     await handle_view_basket(update, context)
 
-# (handle_clear_basket unchanged)
 async def handle_clear_basket(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
     user_id = query.from_user.id
@@ -1424,7 +1418,6 @@ async def _show_crypto_choices_for_basket(update: Update, context: ContextTypes.
 
 
 # --- Other User Handlers ---
-# (handle_view_history unchanged)
 async def handle_view_history(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
     user_id = query.from_user.id
@@ -1462,7 +1455,6 @@ async def handle_view_history(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # --- Language Selection ---
-# (handle_language_selection is the modified version)
 async def handle_language_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     """Allows the user to select language and immediately refreshes the start menu."""
     query = update.callback_query
@@ -1518,7 +1510,6 @@ async def handle_language_selection(update: Update, context: ContextTypes.DEFAUL
     else:
         await _display_language_menu(update, context, current_lang, current_lang_data)
 
-# (_display_language_menu helper unchanged)
 async def _display_language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, current_lang: str, current_lang_data: dict):
      """Helper function to display the language selection keyboard."""
      query = update.callback_query
@@ -1547,7 +1538,6 @@ async def _display_language_menu(update: Update, context: ContextTypes.DEFAULT_T
 
 
 # --- Price List ---
-# (handle_price_list unchanged)
 async def handle_price_list(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
     lang, lang_data = _get_lang_data(context)
@@ -1561,7 +1551,6 @@ async def handle_price_list(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     price_list_title = lang_data.get("price_list_title", "Price List"); select_city_prompt = lang_data.get("select_city_prices_prompt", "Select a city:")
     await query.edit_message_text(f"{EMOJI_PRICELIST} {price_list_title}\n\n{select_city_prompt}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
-# (handle_price_list_city unchanged)
 async def handle_price_list_city(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
     lang, lang_data = _get_lang_data(context)
@@ -1622,7 +1611,6 @@ async def handle_price_list_city(update: Update, context: ContextTypes.DEFAULT_T
 
 
 # --- Review Handlers ---
-# (handle_reviews_menu, handle_leave_review, handle_leave_review_message, handle_view_reviews, handle_leave_review_now unchanged)
 async def handle_reviews_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
     lang, lang_data = _get_lang_data(context)
@@ -1755,7 +1743,6 @@ async def handle_leave_review_now(update: Update, context: ContextTypes.DEFAULT_
     await handle_leave_review(update, context, params)
 
 # --- Refill Handlers ---
-# (handle_refill unchanged)
 async def handle_refill(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
     user_id = query.from_user.id
@@ -1790,7 +1777,6 @@ async def handle_refill(update: Update, context: ContextTypes.DEFAULT_TYPE, para
         else: await query.answer(enter_amount_answer)
     except Exception as e: logger.error(f"Unexpected error handle_refill: {e}", exc_info=True); error_occurred_answer = lang_data.get("error_occurred_answer", "An error occurred."); await query.answer(error_occurred_answer, show_alert=True)
 
-# (handle_refill_amount_message unchanged)
 async def handle_refill_amount_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
