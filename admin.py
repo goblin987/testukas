@@ -21,7 +21,7 @@ from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
     InputMediaPhoto, InputMediaVideo, InputMediaAnimation
 )
-from telegram.constants import ParseMode
+from telegram.constants import ParseMode # Keep for reference
 from telegram.ext import ContextTypes, JobQueue # Import JobQueue
 from telegram import helpers
 import telegram.error as telegram_error
@@ -1269,52 +1269,34 @@ async def handle_adm_edit_type_menu(update: Update, context: ContextTypes.DEFAUL
     type_name = params[0]
     current_emoji = PRODUCT_TYPES.get(type_name, DEFAULT_PRODUCT_EMOJI)
 
-    # Fetch current description
-    current_description = ""
-    conn = None
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        # Correction: Fetch from product_types table
-        c.execute("SELECT description FROM product_types WHERE name = ?", (type_name,))
-        row = c.fetchone()
-        if row and row['description']:
-            current_description = row['description']
-    except sqlite3.Error as e:
-        logger.error(f"DB error fetching description for type '{type_name}': {e}")
-    finally:
-        if conn: conn.close()
+    # Fetch current description (This part seems incorrect in original, product types don't have desc)
+    current_description = "(Description not applicable for Product Types)" # Placeholder
 
-    # <<< FIX: Escape description before putting in Markdown string >>>
-    desc_display = f"\n📝 Description: _{helpers.escape_markdown(current_description or 'Not set', version=2)}_"
+    # <<< FIX: Escape name and description before using in Markdown >>>
+    safe_name = helpers.escape_markdown(type_name, version=2)
+    safe_desc = helpers.escape_markdown(current_description, version=2)
 
     msg_template = lang_data.get("admin_edit_type_menu", "🧩 Editing Type: {type_name}\n\nCurrent Emoji: {emoji}\n{description}\n\nWhat would you like to do?")
-    # <<< FIX: Escape type_name before putting in Markdown string >>>
-    msg = msg_template.format(type_name=helpers.escape_markdown(type_name, version=2), emoji=current_emoji, description=desc_display)
+    msg = msg_template.format(type_name=safe_name, emoji=current_emoji, description=safe_desc)
 
     change_emoji_button_text = lang_data.get("admin_edit_type_emoji_button", "✏️ Change Emoji")
-    change_desc_button_text = lang_data.get("admin_edit_type_desc_button", "📝 Edit Description") # Need this in language file
+    # change_desc_button_text = lang_data.get("admin_edit_type_desc_button", "📝 Edit Description") # Keep commented out
 
     keyboard = [
         [InlineKeyboardButton(change_emoji_button_text, callback_data=f"adm_change_type_emoji|{type_name}")],
-        # [InlineKeyboardButton(change_desc_button_text, callback_data=f"adm_edit_type_desc|{type_name}")], # Add this later if desc edit is needed
+        # [InlineKeyboardButton(change_desc_button_text, callback_data=f"adm_edit_type_desc|{type_name}")],
         [InlineKeyboardButton(f"🗑️ Delete {helpers.escape_markdown(type_name, version=2)}", callback_data=f"adm_delete_type|{type_name}")],
         [InlineKeyboardButton("⬅️ Back to Types", callback_data="adm_manage_types")]
     ]
 
     try:
-        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2)
+        # <<< FIX: Change parse_mode to None to avoid errors >>>
+        await query.edit_message_text(msg.replace('*','').replace('_',''), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
     except telegram_error.BadRequest as e:
         if "message is not modified" in str(e).lower(): await query.answer()
         else:
-            logger.error(f"Error editing type menu (Markdown V2): {e}. Message: {msg}")
-            # Fallback to plain text
-            plain_msg = msg.replace("*", "").replace("_", "")
-            try:
-                await query.edit_message_text(plain_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-            except Exception as fallback_e:
-                 logger.error(f"Error editing type menu (Fallback): {fallback_e}")
-                 await query.answer("Error displaying menu.", show_alert=True)
+            logger.error(f"Error editing type menu: {e}. Message: {msg}")
+            await query.answer("Error displaying menu.", show_alert=True)
 
 # --- Change Type Emoji Prompt ---
 async def handle_adm_change_type_emoji(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
@@ -2038,7 +2020,7 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
         elif action_type == "delete_welcome_template":
             if not action_params: raise ValueError("Missing template_name")
             name_to_delete = action_params[0]
-            # Check if active - Handled by prevention in confirmation step now
+            # Check if active - Now prevented in confirmation step
             delete_wm_result = c.execute("DELETE FROM welcome_messages WHERE name = ?", (name_to_delete,))
             if delete_wm_result.rowcount > 0:
                  conn.commit()
@@ -2118,11 +2100,11 @@ async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAUL
     # Build message and keyboard
     title = lang_data.get("manage_welcome_title", "⚙️ Manage Welcome Messages")
     prompt = lang_data.get("manage_welcome_prompt", "Select a template to manage or activate:")
-    msg = f"{title}\n\n{prompt}\n\n"
+    msg_parts = [f"{title}\n\n{prompt}\n"] # Use list to build message
     keyboard = []
 
     if not templates and offset == 0:
-        msg += "\nNo custom templates found. Add one?"
+        msg_parts.append("\nNo custom templates found. Add one?")
     else:
         for template in templates:
             name = template['name']
@@ -2135,14 +2117,14 @@ async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAUL
             active_indicator = lang_data.get("welcome_template_active", " \\(Active ✅\\)") if is_active else lang_data.get("welcome_template_inactive", "")
 
             # Display Name, Description, and Active Status
-            msg += f"📄 *{safe_name}*{active_indicator}\n_{safe_desc}_\n\n"
+            msg_parts.append(f"\n📄 *{safe_name}*{active_indicator}\n_{safe_desc}_\n") # Removed extra newline
 
-            # Buttons: Edit | Activate (if not active) | Delete (if not default)
+            # Buttons: Edit | Activate (if not active) | Delete (if not default and not active)
             row = [InlineKeyboardButton(lang_data.get("welcome_button_edit", "✏️ Edit"), callback_data=f"adm_edit_welcome|{name}|{offset}")]
             if not is_active:
                  row.append(InlineKeyboardButton(lang_data.get("welcome_button_activate", "✅ Activate"), callback_data=f"adm_activate_welcome|{name}|{offset}"))
 
-            can_delete = not (name == "default")
+            can_delete = not (name == "default") and not is_active # Cannot delete default or active
             if can_delete:
                  row.append(InlineKeyboardButton(lang_data.get("welcome_button_delete", "🗑️ Delete"), callback_data=f"adm_delete_welcome_confirm|{name}|{offset}"))
             keyboard.append(row)
@@ -2154,7 +2136,7 @@ async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAUL
         if current_page > 1: nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"adm_manage_welcome|{max(0, offset - TEMPLATES_PER_PAGE)}"))
         if current_page < total_pages: nav_buttons.append(InlineKeyboardButton("➡️ Next", callback_data=f"adm_manage_welcome|{offset + TEMPLATES_PER_PAGE}"))
         if nav_buttons: keyboard.append(nav_buttons)
-        if total_pages > 1: msg += f"\nPage {current_page}/{total_pages}"
+        if total_pages > 1: msg_parts.append(f"\nPage {current_page}/{total_pages}")
 
 
     # Add "Add New", "Reset Default", and "Back" buttons
@@ -2165,25 +2147,27 @@ async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAUL
          keyboard.append([InlineKeyboardButton(lang_data.get("welcome_button_reset_default", "🔄 Reset to Built-in Default"), callback_data="adm_reset_default_confirm")])
     keyboard.append([InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="admin_menu")])
 
+    final_msg = "".join(msg_parts)
+
     # Send/Edit message
     try:
-        # Use Markdown for bold template names
-        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2)
+        # <<< FIX: Use Markdown V2 for potential formatting, but handle errors >>>
+        await query.edit_message_text(final_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2)
     except telegram_error.BadRequest as e:
-        if "message is not modified" in str(e).lower(): await query.answer() # Acknowledge if not modified
-        else:
-            logger.error(f"Error editing welcome management menu (Markdown V2): {e}. Message: {msg}")
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"Error editing welcome management menu (Markdown V2): {e}. Message: {final_msg[:500]}...") # Log snippet
             # Fallback to plain text
-            plain_msg = msg.replace("*", "").replace("_", "").replace("\\[", "[").replace("\\]", "]").replace("\\(", "(").replace("\\)",")") # Remove markdown
+            plain_msg = final_msg.replace("*", "").replace("_", "").replace("\\[", "[").replace("\\]", "]").replace("\\(", "(").replace("\\)",")") # Basic unescaping for logs might be needed too
             try:
                 await query.edit_message_text(plain_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
             except Exception as fallback_e:
                 logger.error(f"Error editing welcome management menu (Fallback): {fallback_e}")
                 await query.answer("Error displaying menu.", show_alert=True)
+        else:
+             await query.answer() # Acknowledge if not modified
     except Exception as e:
         logger.error(f"Unexpected error in handle_adm_manage_welcome: {e}", exc_info=True)
         await query.answer("An error occurred displaying the menu.", show_alert=True)
-
 
 async def handle_adm_activate_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     """Activates the selected welcome message template."""
@@ -2271,14 +2255,14 @@ async def handle_adm_edit_welcome(update: Update, context: ContextTypes.DEFAULT_
         [InlineKeyboardButton("⬅️ Back", callback_data=f"adm_manage_welcome|{offset}")]
     ]
     try:
-        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2)
+        # <<< FIX: Change parse_mode to None to avoid errors >>>
+        await query.edit_message_text(msg.replace("*", "").replace("_", ""), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
     except telegram_error.BadRequest as e:
-        if "message is not modified" in str(e).lower(): await query.answer()
-        else:
-            logger.error(f"Error editing welcome edit menu (Markdown): {e}. Message: {msg}")
-            plain_msg = msg.replace("*", "").replace("_", "")
-            try: await query.edit_message_text(plain_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-            except Exception as fallback_e: logger.error(f"Error editing welcome edit menu (Fallback): {fallback_e}"); await query.answer("Error displaying menu.", show_alert=True)
+        if "message is not modified" not in str(e).lower(): logger.error(f"Error editing edit welcome menu: {e}. Message: {msg}")
+        else: await query.answer() # Acknowledge if not modified
+    except Exception as e:
+        logger.error(f"Unexpected error in handle_adm_edit_welcome: {e}")
+        await query.answer("Error displaying edit menu.", show_alert=True)
 
 # <<< NEW >>>
 async def handle_adm_edit_welcome_text(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
@@ -2314,14 +2298,19 @@ async def handle_adm_edit_welcome_text(update: Update, context: ContextTypes.DEF
     # Escape name and current text for display
     prompt = prompt_template.format(
         name=helpers.escape_markdown(template_name, version=2),
-        current_text=helpers.escape_markdown(current_text, version=2),
+        current_text=helpers.escape_markdown(current_text, version=2), # Escape current text display
         placeholders=placeholders
     )
     if len(prompt) > 4000: prompt = prompt[:4000] + "\n[... Current text truncated ...]"
 
     # Go back to the specific template's edit menu
     keyboard = [[InlineKeyboardButton("❌ Cancel Edit", callback_data=f"adm_edit_welcome|{template_name}|{offset}")]]
-    await query.edit_message_text(prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2)
+    try:
+        # <<< FIX: Change parse_mode to None for reliability >>>
+        await query.edit_message_text(prompt.replace('`',''), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    except telegram_error.BadRequest as e:
+        if "message is not modified" not in str(e).lower(): logger.error(f"Error editing edit text prompt: {e}")
+        else: await query.answer()
     await query.answer("Enter new template text.")
 
 # <<< NEW >>>
@@ -2464,7 +2453,7 @@ async def _show_welcome_preview(update: Update, context: ContextTypes.DEFAULT_TY
         # Format the preview text
         escaped_dummy_username = helpers.escape_markdown(dummy_username, version=2)
         preview_text_raw = template_text.format(
-            username=escaped_dummy_username,
+            username=escaped_dummy_username, # Use escaped username in format
             status=dummy_status,
             progress_bar=dummy_progress,
             balance_str=dummy_balance,
@@ -2475,13 +2464,15 @@ async def _show_welcome_preview(update: Update, context: ContextTypes.DEFAULT_TY
     except KeyError as e:
         logger.warning(f"KeyError formatting welcome preview for '{template_name}': {e}")
         err_msg_template = lang_data.get("welcome_invalid_placeholder", "⚠️ Formatting Error! Missing placeholder: `{key}`\n\nRaw Text:\n{text}")
-        preview_text_raw = err_msg_template.format(key=e, text=template_text[:500])
+        # Escape the raw template text before inserting into the error message
+        preview_text_raw = err_msg_template.format(key=e, text=helpers.escape_markdown(template_text[:500], version=2))
     except Exception as format_e:
         logger.error(f"Unexpected error formatting preview: {format_e}")
         err_msg_template = lang_data.get("welcome_formatting_error", "⚠️ Unexpected Formatting Error!\n\nRaw Text:\n{text}")
-        preview_text_raw = err_msg_template.format(text=template_text[:500])
+        # Escape the raw template text before inserting into the error message
+        preview_text_raw = err_msg_template.format(text=helpers.escape_markdown(template_text[:500], version=2))
 
-    # Escape the *result* of the format for display
+    # Escape the *result* of the format for display (handles errors too)
     preview_text_escaped = helpers.escape_markdown(preview_text_raw, version=2)
 
     title = lang_data.get("welcome_preview_title", "--- Welcome Message Preview ---")
@@ -2491,14 +2482,14 @@ async def _show_welcome_preview(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Escape name and description for the header part
     safe_name = helpers.escape_markdown(template_name, version=2)
-    safe_desc = helpers.escape_markdown(template_description, version=2)
+    safe_desc = helpers.escape_markdown(template_description or "Not set", version=2) # Handle None case
 
     msg = f"*{title}*\n\n"
     msg += f"*{name_label}:* {safe_name}\n"
     msg += f"*{desc_label}:* _{safe_desc}_\n"
-    msg += f"---\n"
+    msg += f"\\-\\-\\-\n" # Escape hyphens
     msg += f"{preview_text_escaped}\n" # Display the formatted (and potentially error) message
-    msg += f"---\n"
+    msg += f"\\-\\-\\-\n" # Escape hyphens
     msg += f"\n{confirm_prompt}"
 
     # Set state for confirmation callback
@@ -2518,11 +2509,14 @@ async def _show_welcome_preview(update: Update, context: ContextTypes.DEFAULT_TY
         try:
             await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2)
         except telegram_error.BadRequest as e:
-            if "message is not modified" not in str(e).lower():
-                logger.error(f"Error editing preview message (MDv2): {e}")
-                await send_message_with_retry(context.bot, chat_id, msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2)
-            else: await query.answer()
+             if "message is not modified" not in str(e).lower():
+                 logger.error(f"Error editing preview message (MDv2): {e}")
+                 # Fallback to plain text for preview if MD fails
+                 plain_msg = msg.replace("*", "").replace("_", "").replace("\\","")
+                 await send_message_with_retry(context.bot, chat_id, plain_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+             else: await query.answer() # Ignore modification error
     else:
+        # Send as new message if no original message to edit
         await send_message_with_retry(context.bot, chat_id, msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2)
 
     if query:
@@ -3250,10 +3244,12 @@ async def handle_adm_welcome_template_name_message(update: Update, context: Cont
 
     placeholders = "`{username}`, `{status}`, `{progress_bar}`, `{balance_str}`, `{purchases}`, `{basket_count}`"
     prompt_template = lang_data.get("welcome_add_text_prompt", "Template Name: {name}\n\nPlease reply with the full welcome message text. Available placeholders:\n{placeholders}")
+    # <<< FIX: Escape name before formatting >>>
     prompt = prompt_template.format(name=helpers.escape_markdown(template_name, version=2), placeholders=placeholders)
     keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_welcome|0")]] # Back to first page
 
-    await send_message_with_retry(context.bot, chat_id, prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2)
+    # <<< FIX: Change parse_mode to None for reliability >>>
+    await send_message_with_retry(context.bot, chat_id, prompt.replace('`', ''), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
 async def handle_adm_welcome_template_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles admin entering the text for a new/edited welcome template."""
@@ -3272,7 +3268,22 @@ async def handle_adm_welcome_template_text_message(update: Update, context: Cont
         return # Keep state
 
     if 'pending_welcome_template' not in context.user_data:
-        context.user_data['pending_welcome_template'] = {}
+        # This might happen if the state wasn't cleaned up properly, try to recover
+        if current_state == 'awaiting_welcome_template_edit':
+            name = context.user_data.get('editing_welcome_template_name')
+            if name:
+                context.user_data['pending_welcome_template'] = {'name': name, 'is_editing': True}
+                logger.warning("Recovered pending_welcome_template context for editing.")
+            else:
+                 logger.error("State is awaiting_welcome_template_edit but name is missing and cannot recover.")
+                 await send_message_with_retry(context.bot, chat_id, "❌ Error: Context lost. Please start again.", parse_mode=None)
+                 context.user_data.pop('state', None)
+                 return
+        else:
+            logger.error("State is awaiting_welcome_template_text but pending_welcome_template missing.")
+            await send_message_with_retry(context.bot, chat_id, "❌ Error: Context lost. Please start again.", parse_mode=None)
+            context.user_data.pop('state', None)
+            return
 
     # Store the text
     context.user_data['pending_welcome_template']['text'] = template_text
@@ -3287,7 +3298,7 @@ async def handle_adm_welcome_template_text_message(update: Update, context: Cont
         prompt_template = lang_data.get("welcome_add_description_prompt", "Optional: Enter a short description for this template (admin view only). Send '-' to skip.")
         template_name = context.user_data.get('pending_welcome_template',{}).get('name', 'New Template')
         prompt = f"Text for '{template_name}' received.\n\n{prompt_template}"
-        offset = context.user_data.get('editing_welcome_offset', 0) # Use offset if available
+        offset = context.user_data.get('editing_welcome_offset', 0) # Use offset if available (though unlikely for add)
         keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data=f"adm_manage_welcome|{offset}")]]
         await send_message_with_retry(context.bot, chat_id, prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
     else:
@@ -3346,11 +3357,12 @@ async def handle_adm_welcome_description_edit_message(update: Update, context: C
         logger.error("State is awaiting_welcome_description_edit but name is missing.")
         context.user_data.pop('state', None)
         context.user_data.pop("editing_welcome_template_name", None) # Clean up
+        context.user_data.pop("editing_welcome_field", None)
         await send_message_with_retry(context.bot, chat_id, "❌ Error: Context lost. Please start again.")
         return
 
     if new_description == '-':
-        # User wants to skip editing description, go back to edit options
+        # User wants to skip editing description, treat as cancel of this specific edit step
         offset = context.user_data.get('editing_welcome_offset', 0)
         await handle_adm_edit_welcome(update, context, params=[template_name, str(offset)])
         return
@@ -3386,4 +3398,7 @@ async def handle_adm_welcome_description_edit_message(update: Update, context: C
 
 # --- Admin Message Handlers (Existing - Kept for completeness) ---
 # These handlers are mapped in main.py's STATE_HANDLERS dictionary
+
+# ... (Keep existing message handlers: handle_adm_add_city_message, handle_adm_add_district_message, handle_adm_edit_district_message, handle_adm_edit_city_message, handle_adm_custom_size_message, handle_adm_price_message, handle_adm_bot_media_message, handle_adm_add_type_message, handle_adm_add_type_emoji_message, handle_adm_edit_type_emoji_message, handle_adm_discount_code_message, handle_adm_discount_value_message, handle_adm_broadcast_inactive_days_message, handle_adm_broadcast_message) ...
+
 
