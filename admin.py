@@ -789,7 +789,13 @@ async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE, params=
         if media_group_id: job_name = f"process_media_group_{user_id}_{media_group_id}"; remove_job_if_exists(job_name, context)
     if query:
          try: await query.edit_message_text("❌ Add Product Cancelled", parse_mode=None)
-         except telegram_error.BadRequest as e: pass if "message is not modified" in str(e).lower() else logger.error(f"Error editing cancel message: {e}")
+        # --- CORRECTED BLOCK ---
+except telegram_error.BadRequest as e:
+    if "message is not modified" in str(e).lower():
+        pass # It's okay if the message wasn't modified
+    else:
+        logger.error(f"Error editing cancel message: {e}")
+# --- END CORRECTION ---
          keyboard = [[InlineKeyboardButton("🔧 Admin Menu", callback_data="admin_menu"), InlineKeyboardButton("🏠 User Home", callback_data="back_start")]]; await send_message_with_retry(context.bot, query.message.chat_id, "Returning to Admin Menu.", reply_markup=InlineKeyboardMarkup(keyboard))
     elif update.message: await send_message_with_retry(context.bot, update.message.chat_id, "Add product cancelled.")
     else: logger.info("Add product flow cancelled internally (no query/message object).")
