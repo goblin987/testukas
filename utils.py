@@ -672,8 +672,8 @@ def init_db():
                     # Use INSERT OR IGNORE to avoid errors if templates already exist
                     c.execute("INSERT OR IGNORE INTO welcome_messages (name, template_text, description) VALUES (?, ?, ?)", (name, text, desc))
                     # <<< FIX: Use cursor.rowcount (standard) or changes() AFTER execute >>>
-                    if c.rowcount > 0: # Check if a row was actually inserted
-                        inserted_count += 1
+                    if conn.total_changes > inserted_count: # Check if changes were made
+                        inserted_count = conn.total_changes # Update count based on total changes (more reliable for multi-row inserts/ignores)
                 except sqlite3.Error as insert_e: # Catch potential errors during insert
                     logger.error(f"Error inserting template '{name}': {insert_e}")
 
@@ -1114,9 +1114,9 @@ def fetch_user_ids_for_broadcast(target_type: str, target_value: str | int | Non
         c = conn.cursor()
 
         if target_type == 'all':
-            c.execute("SELECT user_id FROM users")
+            c.execute("SELECT user_id FROM users WHERE is_banned=0") # Exclude banned users
             user_ids = [row['user_id'] for row in c.fetchall()]
-            logger.info(f"Broadcast target 'all': Found {len(user_ids)} users.")
+            logger.info(f"Broadcast target 'all': Found {len(user_ids)} non-banned users.")
 
         elif target_type == 'status' and target_value:
             status = str(target_value).lower()
@@ -1128,27 +1128,28 @@ def fetch_user_ids_for_broadcast(target_type: str, target_value: str | int | Non
 
             if min_purchases != -1:
                  if max_purchases == float('inf'):
-                     c.execute("SELECT user_id FROM users WHERE total_purchases >= ?", (min_purchases,))
+                     c.execute("SELECT user_id FROM users WHERE total_purchases >= ? AND is_banned=0", (min_purchases,)) # Exclude banned
                  else:
-                     c.execute("SELECT user_id FROM users WHERE total_purchases BETWEEN ? AND ?", (min_purchases, max_purchases))
+                     c.execute("SELECT user_id FROM users WHERE total_purchases BETWEEN ? AND ? AND is_banned=0", (min_purchases, max_purchases)) # Exclude banned
                  user_ids = [row['user_id'] for row in c.fetchall()]
-                 logger.info(f"Broadcast target status '{target_value}': Found {len(user_ids)} users.")
+                 logger.info(f"Broadcast target status '{target_value}': Found {len(user_ids)} non-banned users.")
             else: logger.warning(f"Invalid status value for broadcast: {target_value}")
 
         elif target_type == 'city' and target_value:
             city_name = str(target_value)
-            # Find users whose *most recent* purchase was in this city
+            # Find non-banned users whose *most recent* purchase was in this city
             c.execute("""
-                SELECT user_id
+                SELECT p1.user_id
                 FROM purchases p1
-                WHERE city = ? AND purchase_date = (
+                JOIN users u ON p1.user_id = u.user_id
+                WHERE p1.city = ? AND u.is_banned = 0 AND p1.purchase_date = (
                     SELECT MAX(purchase_date)
                     FROM purchases p2
                     WHERE p1.user_id = p2.user_id
                 )
             """, (city_name,))
             user_ids = [row['user_id'] for row in c.fetchall()]
-            logger.info(f"Broadcast target city '{city_name}': Found {len(user_ids)} users based on last purchase.")
+            logger.info(f"Broadcast target city '{city_name}': Found {len(user_ids)} non-banned users based on last purchase.")
 
         elif target_type == 'inactive' and target_value:
             try:
@@ -1157,27 +1158,28 @@ def fetch_user_ids_for_broadcast(target_type: str, target_value: str | int | Non
                 cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_inactive)
                 cutoff_iso = cutoff_date.isoformat()
 
-                # Find users whose last purchase date is older than the cutoff date OR have no purchases
+                # Find non-banned users whose last purchase date is older than the cutoff date OR have no purchases
                 # 1. Get users with last purchase older than cutoff
                 c.execute("""
-                    SELECT user_id
+                    SELECT p1.user_id
                     FROM purchases p1
-                    WHERE purchase_date = (
+                    JOIN users u ON p1.user_id = u.user_id
+                    WHERE u.is_banned = 0 AND p1.purchase_date = (
                         SELECT MAX(purchase_date)
                         FROM purchases p2
                         WHERE p1.user_id = p2.user_id
-                    ) AND purchase_date < ?
+                    ) AND p1.purchase_date < ?
                 """, (cutoff_iso,))
                 inactive_users = {row['user_id'] for row in c.fetchall()}
 
                 # 2. Get users with zero purchases (who implicitly meet the inactive criteria)
-                c.execute("SELECT user_id FROM users WHERE total_purchases = 0")
+                c.execute("SELECT user_id FROM users WHERE total_purchases = 0 AND is_banned = 0") # Exclude banned
                 zero_purchase_users = {row['user_id'] for row in c.fetchall()}
 
                 # Combine the sets
                 user_ids_set = inactive_users.union(zero_purchase_users)
                 user_ids = list(user_ids_set)
-                logger.info(f"Broadcast target inactive >= {days_inactive} days: Found {len(user_ids)} users.")
+                logger.info(f"Broadcast target inactive >= {days_inactive} days: Found {len(user_ids)} non-banned users.")
 
             except (ValueError, TypeError):
                 logger.error(f"Invalid number of days for inactive broadcast: {target_value}")
