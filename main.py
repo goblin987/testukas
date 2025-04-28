@@ -60,8 +60,8 @@ from user import (
     handle_apply_discount_basket_pay,
     handle_skip_discount_basket_pay,
     handle_basket_discount_code_message,
-    _show_crypto_choices_for_basket, # Import the helper if needed directly (though unlikely)
-    handle_confirm_pay # <<< Ensure this is imported from user.py now
+    _show_crypto_choices_for_basket # Import the helper if needed directly (though unlikely)
+    # <<< NOTE: user.handle_confirm_pay is NOT imported here, it's called via payment.handle_confirm_pay >>>
 )
 from admin import (
     handle_admin_menu, handle_sales_analytics_menu, handle_sales_dashboard,
@@ -98,14 +98,17 @@ from admin import (
     handle_adm_add_welcome_start,
     handle_adm_edit_welcome,
     handle_adm_delete_welcome_confirm,
-    handle_reset_default_welcome, # <<< NEW Import
-    handle_adm_edit_welcome_text, # <<< NEW Import
-    handle_adm_edit_welcome_desc, # <<< NEW Import (Message handler also needs import)
-    handle_confirm_save_welcome,  # <<< NEW Import
     handle_adm_welcome_template_name_message, # Message handler
     handle_adm_welcome_template_text_message,   # Message handler
-    handle_adm_welcome_description_message, # <<< NEW Import
-    handle_adm_welcome_description_edit_message # <<< NEW Import
+    handle_adm_edit_welcome_text,           # <<< Add this import
+    handle_reset_default_welcome,         # <<< Add this import
+    # <<< NEW Welcome Save/Preview Handlers (if needed directly, usually not) >>>
+    # _show_welcome_preview, # Usually internal to admin.py
+    handle_confirm_save_welcome,          # <<< Add this import (for save button)
+    # <<< NEW Description Edit Handlers (if needed directly, usually not) >>>
+    handle_adm_edit_welcome_desc,           # <<< Add this import
+    handle_adm_welcome_description_message, # Message Handler
+    handle_adm_welcome_description_edit_message # Message Handler
 )
 from viewer_admin import (
     handle_viewer_admin_menu,
@@ -152,10 +155,9 @@ def callback_query_router(func):
             parts = query.data.split('|')
             command = parts[0]
             params = parts[1:]
-            target_func_name = f"handle_{command}" # Not directly used, but good for debug
+            target_func_name = f"handle_{command}"
 
             # Map command strings to the actual function objects
-            # Ensure the value is the *function object*, not its name string
             KNOWN_HANDLERS = {
                 # User Handlers
                 "start": start, "back_start": handle_back_start, "shop": handle_shop,
@@ -171,7 +173,7 @@ def callback_query_router(func):
                 "view_history": handle_view_history,
                 "apply_discount_start": apply_discount_start, "remove_discount": remove_discount,
                 # Basket Payment Flow Handlers
-                "confirm_pay": handle_confirm_pay, # <<< POINTS TO USER HANDLER NOW
+                "confirm_pay": payment.handle_confirm_pay, # <<< POINTS TO PAYMENT WRAPPER
                 "apply_discount_basket_pay": handle_apply_discount_basket_pay,
                 "skip_discount_basket_pay": handle_skip_discount_basket_pay,
                 "select_basket_crypto": payment.handle_select_basket_crypto,
@@ -216,12 +218,12 @@ def callback_query_router(func):
                 "adm_manage_welcome": handle_adm_manage_welcome,
                 "adm_activate_welcome": handle_adm_activate_welcome,
                 "adm_add_welcome_start": handle_adm_add_welcome_start,
-                "adm_edit_welcome": handle_adm_edit_welcome, # Points to the menu showing edit options
+                "adm_edit_welcome": handle_adm_edit_welcome,
                 "adm_delete_welcome_confirm": handle_adm_delete_welcome_confirm,
-                "adm_reset_default_confirm": handle_reset_default_welcome, # <<< ADDED RESET BUTTON
-                "adm_edit_welcome_text": handle_adm_edit_welcome_text, # <<< ADDED EDIT TEXT BUTTON
-                "adm_edit_welcome_desc": handle_adm_edit_welcome_desc, # <<< ADDED EDIT DESC BUTTON
-                "confirm_save_welcome": handle_confirm_save_welcome, # <<< ADDED SAVE BUTTON
+                "adm_edit_welcome_text": handle_adm_edit_welcome_text, # <<< ADDED
+                "adm_edit_welcome_desc": handle_adm_edit_welcome_desc, # <<< ADDED
+                "adm_reset_default_confirm": handle_reset_default_welcome, # <<< ADDED
+                "confirm_save_welcome": handle_confirm_save_welcome, # <<< ADDED
                 # -------------------------------
                 # --- User Management Callbacks ---
                 "adm_manage_users": handle_manage_users_start,
@@ -240,7 +242,6 @@ def callback_query_router(func):
             target_func = KNOWN_HANDLERS.get(command)
 
             if target_func and asyncio.iscoroutinefunction(target_func):
-                logger.debug(f"Routing callback query '{command}' to function {target_func.__name__}")
                 await target_func(update, context, params)
             else:
                 logger.warning(f"No async handler function found or mapped for callback command: {command}")
@@ -293,9 +294,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # --- Welcome Message States ---
         'awaiting_welcome_template_name': handle_adm_welcome_template_name_message,
         'awaiting_welcome_template_text': handle_adm_welcome_template_text_message,
-        'awaiting_welcome_template_edit': handle_adm_welcome_template_text_message, # Reuses text handler
-        'awaiting_welcome_description': handle_adm_welcome_description_message, # <<< NEW state for description
-        'awaiting_welcome_description_edit': handle_adm_welcome_description_edit_message, # <<< NEW state for description edit
+        'awaiting_welcome_template_edit': handle_adm_welcome_template_text_message,
+        'awaiting_welcome_description': handle_adm_welcome_description_message, # <<< ADDED
+        'awaiting_welcome_description_edit': handle_adm_welcome_description_edit_message, # <<< ADDED
+        'awaiting_welcome_confirmation': None, # Handled by callback (confirm_save_welcome)
         # ----------------------------
         # --- Refill ---
         'awaiting_refill_amount': handle_refill_amount_message,
@@ -309,24 +311,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     handler_func = STATE_HANDLERS.get(state)
     if handler_func:
-        logger.debug(f"Found handler {handler_func.__name__} for state '{state}'")
+        # If the handler is for drop details, it might need the job queue
+        # Ensure the queue is passed if necessary (though it's available via context.job_queue)
         await handler_func(update, context)
     else:
-        logger.debug(f"No message handler found for state: {state}")
-        # Check if user is banned before processing other messages (only if not in a specific state)
-        if state is None:
-            conn = None; is_banned = False
+        # Check if user is banned before processing other messages
+        if state is None: # Only check if not in a specific state
+            conn = None
+            is_banned = False
             try:
                 conn = get_db_connection()
                 c = conn.cursor()
                 c.execute("SELECT is_banned FROM users WHERE user_id = ?", (user_id,))
                 res = c.fetchone()
-                if res and res['is_banned'] == 1: is_banned = True
-            except sqlite3.Error as e: logger.error(f"DB error checking ban status for user {user_id}: {e}")
+                if res and res['is_banned'] == 1:
+                    is_banned = True
+            except sqlite3.Error as e:
+                logger.error(f"DB error checking ban status for user {user_id}: {e}")
             finally:
                 if conn: conn.close()
-            if is_banned: logger.info(f"Ignoring message from banned user {user_id}."); return
 
+            if is_banned:
+                logger.info(f"Ignoring message from banned user {user_id}.")
+                return # Don't process commands/messages from banned users
+
+        logger.debug(f"Ignoring message from user {user_id} in state: {state}")
 
 # --- Error Handler ---
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -473,19 +482,19 @@ def nowpayments_webhook():
         return Response(status=503)
 
     # --- SIGNATURE VERIFICATION (Enable in production!) ---
-    # signature = request.headers.get('x-nowpayments-sig')
-    # if not verify_nowpayments_signature(request, signature, NOWPAYMENTS_IPN_SECRET):
-    #     logger.error("Invalid NOWPayments webhook signature received or verification failed.")
-    #     return Response("Invalid Signature", status=401)
-    # logger.info("NOWPayments webhook signature verified.")
-    logger.warning("!!! NOWPayments signature verification is temporarily disabled !!!")
+    signature = request.headers.get('x-nowpayments-sig')
+    if not verify_nowpayments_signature(request, signature, NOWPAYMENTS_IPN_SECRET):
+        logger.error("Invalid NOWPayments webhook signature received or verification failed.")
+        return Response("Invalid Signature", status=401)
+    logger.info("NOWPayments webhook signature verified.")
+    # logger.warning("!!! NOWPayments signature verification is temporarily disabled !!!") # Keep commented out
 
     if not request.is_json:
         logger.warning("Webhook received non-JSON request.")
         return Response("Invalid Request", status=400)
 
     data = request.get_json()
-    logger.info(f"NOWPayments IPN received (UNVERIFIED): {json.dumps(data)}")
+    logger.info(f"NOWPayments IPN received (VERIFIED): {json.dumps(data)}")
 
     required_keys = ['payment_id', 'payment_status', 'pay_currency', 'actually_paid']
     if not all(key in data for key in required_keys):
@@ -763,7 +772,7 @@ def main() -> None:
         await application.start()
         logger.info("Telegram application started (webhook mode).")
 
-        port = int(os.environ.get("PORT", 8080))
+        port = int(os.environ.get("PORT", 10000)) # Default to 10000 for Render
         flask_thread = threading.Thread(
             target=lambda: flask_app.run(host='0.0.0.0', port=port, debug=False),
             daemon=True
