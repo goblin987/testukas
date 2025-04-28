@@ -17,7 +17,7 @@ import hashlib
 
 
 # --- Telegram Imports ---
-from telegram import Update, BotCommand, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup # <<< Added InlineKeyboardMarkup
+from telegram import Update, BotCommand, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup
 from telegram.ext import (
     Application, ApplicationBuilder, Defaults, ContextTypes,
     CommandHandler, CallbackQueryHandler, MessageHandler, filters,
@@ -91,7 +91,15 @@ from admin import (
     handle_adm_add_type_emoji_message, # <-- Import new type emoji handler
     handle_adm_edit_type_emoji_message, # <-- Import new type emoji edit handler
     process_discount_code_input, handle_adm_discount_code_message, handle_adm_discount_value_message,
-    handle_adm_manage_reviews, handle_adm_delete_review_confirm
+    handle_adm_manage_reviews, handle_adm_delete_review_confirm,
+    # <<< Welcome Message Handlers >>>
+    handle_adm_manage_welcome,
+    handle_adm_activate_welcome,
+    handle_adm_add_welcome_start,
+    handle_adm_edit_welcome,
+    handle_adm_delete_welcome_confirm,
+    handle_adm_welcome_template_name_message, # Message handler
+    handle_adm_welcome_template_text_message   # Message handler
 )
 from viewer_admin import (
     handle_viewer_admin_menu,
@@ -197,6 +205,13 @@ def callback_query_router(func):
                 # --------------------------
                 "adm_manage_reviews": handle_adm_manage_reviews,
                 "adm_delete_review_confirm": handle_adm_delete_review_confirm,
+                # <<< Welcome Message Callbacks >>>
+                "adm_manage_welcome": handle_adm_manage_welcome,
+                "adm_activate_welcome": handle_adm_activate_welcome,
+                "adm_add_welcome_start": handle_adm_add_welcome_start,
+                "adm_edit_welcome": handle_adm_edit_welcome,
+                "adm_delete_welcome_confirm": handle_adm_delete_welcome_confirm,
+                # -------------------------------
                 # --- User Management Callbacks ---
                 "adm_manage_users": handle_manage_users_start,
                 "adm_view_user": handle_view_user_profile,
@@ -244,7 +259,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     STATE_HANDLERS = {
         'awaiting_review': handle_leave_review_message,
         'awaiting_user_discount_code': handle_user_discount_code_message,
-        'awaiting_basket_discount_code': handle_basket_discount_code_message, # <<< NEW state
+        'awaiting_basket_discount_code': handle_basket_discount_code_message,
         # Admin Message Handlers
         'awaiting_new_city_name': handle_adm_add_city_message,
         'awaiting_edit_city_name': handle_adm_edit_city_message,
@@ -263,6 +278,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # --------------------------
         'awaiting_discount_code': handle_adm_discount_code_message,
         'awaiting_discount_value': handle_adm_discount_value_message,
+        # --- Welcome Message States ---
+        'awaiting_welcome_template_name': handle_adm_welcome_template_name_message, # <<< NEW
+        'awaiting_welcome_template_text': handle_adm_welcome_template_text_message, # <<< NEW
+        'awaiting_welcome_template_edit': handle_adm_welcome_template_text_message, # <<< NEW (uses same handler)
+        # ----------------------------
         # --- Refill ---
         'awaiting_refill_amount': handle_refill_amount_message,
         'awaiting_refill_crypto_choice': None, # Handled by callback
