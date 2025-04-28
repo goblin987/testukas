@@ -667,15 +667,15 @@ def init_db():
                 ("basket_focus", "Welcome back, {username}!\n\n🛒 You have **{basket_count} item(s)** in your basket! Don't forget about them!\n💰 Balance: {balance_str} EUR\n⭐ Status: {status} ({purchases} total purchases)\n\nCheck out your basket, keep shopping, or top up! 👇\n\n⚠️ Note: No refunds.", "Reminds user about items in basket")
             ]
             inserted_count = 0
+            changes_before = conn.total_changes # Get changes before loop
             for name, text, desc in initial_templates:
                 try:
                     # Use INSERT OR IGNORE to avoid errors if templates already exist
                     c.execute("INSERT OR IGNORE INTO welcome_messages (name, template_text, description) VALUES (?, ?, ?)", (name, text, desc))
-                    # <<< FIX: Use cursor.rowcount (standard) or changes() AFTER execute >>>
-                    if conn.total_changes > inserted_count: # Check if changes were made
-                        inserted_count = conn.total_changes # Update count based on total changes (more reliable for multi-row inserts/ignores)
                 except sqlite3.Error as insert_e: # Catch potential errors during insert
                     logger.error(f"Error inserting template '{name}': {insert_e}")
+            changes_after = conn.total_changes # Get changes after loop
+            inserted_count = changes_after - changes_before # Calculate the difference
 
             if inserted_count > 0:
                 logger.info(f"Checked/Inserted {inserted_count} initial welcome message templates.")
@@ -884,6 +884,21 @@ else: logger.info(f"{BOT_MEDIA_JSON_PATH} not found. Bot starting without defaul
 
 
 # --- Utility Functions ---
+# >>> ADD _get_lang_data function here <<<
+def _get_lang_data(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, dict]:
+    """Gets the current language code and corresponding language data dictionary."""
+    lang = context.user_data.get("lang", "en")
+    # Uses LANGUAGES dict defined above in this file
+    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    if lang not in LANGUAGES:
+        logger.warning(f"_get_lang_data: Language '{lang}' not found in LANGUAGES dict. Falling back to 'en'.")
+        lang = 'en' # Ensure lang variable reflects the fallback
+
+    # Debugging is now inside the user/admin functions that call this
+    # keys_sample = list(lang_data.keys())[:5]
+    # logger.debug(f"_get_lang_data: Returning lang '{lang}' and lang_data keys sample: {keys_sample}...")
+    return lang, lang_data
+
 def format_currency(value):
     try: return f"{Decimal(str(value)):.2f}"
     except (ValueError, TypeError): logger.warning(f"Could format currency {value}"); return "0.00"
