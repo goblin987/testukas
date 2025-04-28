@@ -1997,10 +1997,10 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
             name_to_delete = action_params[0]
             # Check if active
             c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
-            active_name = c.fetchone(); active_name = active_name[0] if active_name else None
+            active_name = c.fetchone(); active_name = active_name['setting_value'] if active_name else None # Use column name
             if active_name == name_to_delete:
                  # If deleting active, revert setting to 'default'
-                 c.execute("UPDATE bot_settings SET setting_value = ? WHERE setting_key = ?", ("default", "active_welcome_message_name"))
+                 c.execute("INSERT OR REPLACE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)", ("active_welcome_message_name", "default"))
                  logger.info(f"Deleting active welcome template '{name_to_delete}', resetting active to 'default'.")
 
             delete_wm_result = c.execute("DELETE FROM welcome_messages WHERE name = ?", (name_to_delete,))
@@ -2672,967 +2672,6 @@ async def handle_adm_broadcast_message(update: Update, context: ContextTypes.DEF
     ]
     await send_message_with_retry(context.bot, chat_id, preview_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
-# <<< NEW Welcome Message Management Handlers >>>
-
-async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Displays the welcome message template management screen."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-
-    templates = get_welcome_message_templates() # Sync function
-    conn = None
-    active_template_name = "default" # Fallback
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
-        res = c.fetchone()
-        if res: active_template_name = res['setting_value']
-    except Exception as e:
-        logger.error(f"Error fetching active welcome template name: {e}")
-    finally:
-        if conn: conn.close()
-
-    title = lang_data.get("manage_welcome_title", "⚙️ Manage Welcome Messages")
-    prompt = lang_data.get("manage_welcome_prompt", "Select a template to manage or activate:")
-    msg = f"{title}\n\n{prompt}\n"
-    keyboard = []
-
-    if not templates:
-        msg += "\nNo templates found. Add one?"
-    else:
-        for template in templates:
-            name = template['name']
-            is_active = (name == active_template_name)
-            active_indicator = lang_data.get("welcome_template_active", " (Active ✅)") if is_active else lang_data.get("welcome_template_inactive", "")
-            row = [
-                InlineKeyboardButton(f"{name}{active_indicator}", callback_data=f"adm_edit_welcome|{name}"),
-            ]
-            if not is_active:
-                row.append(InlineKeyboardButton(lang_data.get("welcome_button_activate", "✅ Activate"), callback_data=f"adm_activate_welcome|{name}"))
-            # Allow deleting only if more than one template exists OR if it's not the default one
-            if len(templates) > 1 or name != "default":
-                row.append(InlineKeyboardButton(lang_data.get("welcome_button_delete", "🗑️ Delete"), callback_data=f"adm_delete_welcome_confirm|{name}"))
-            keyboard.append(row)
-
-    keyboard.append([InlineKeyboardButton(lang_data.get("welcome_button_add_new", "➕ Add New Template"), callback_data="adm_add_welcome_start")])
-    keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")])
-
-    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-async def handle_adm_activate_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Activates the selected welcome message template."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
-    if not params: return await query.answer("Error: Template name missing.", show_alert=True)
-
-    template_name = params[0]
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-
-    success = set_active_welcome_message(template_name)
-
-    if success:
-        msg_template = lang_data.get("welcome_activate_success", "✅ Template '{name}' activated.")
-        await query.answer(msg_template.format(name=template_name))
-        await handle_adm_manage_welcome(update, context) # Refresh menu
-    else:
-        msg_template = lang_data.get("welcome_activate_fail", "❌ Failed to activate template '{name}'.")
-        await query.answer(msg_template.format(name=template_name), show_alert=True)
-
-async def handle_adm_add_welcome_start(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Starts the process of adding a new welcome message template."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-
-    context.user_data['state'] = 'awaiting_welcome_template_name'
-    prompt = lang_data.get("welcome_add_name_prompt", "Enter a unique short name for the new template (e.g., 'default', 'promo_weekend'):")
-    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_welcome")]]
-    await query.edit_message_text(prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-    await query.answer("Enter template name in chat.")
-
-async def handle_adm_edit_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Shows the current template text and prompts for a new one."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
-    if not params: return await query.answer("Error: Template name missing.", show_alert=True)
-
-    template_name = params[0]
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-
-    templates = get_welcome_message_templates()
-    current_text = DEFAULT_WELCOME_MESSAGE # Fallback
-    for t in templates:
-        if t['name'] == template_name:
-            current_text = t['template_text']
-            break
-    else: # If loop completes without finding
-        await query.answer("Template not found.", show_alert=True)
-        return await handle_adm_manage_welcome(update, context)
-
-    context.user_data['state'] = 'awaiting_welcome_template_edit'
-    context.user_data['editing_welcome_template_name'] = template_name
-    placeholders = "{username}, {status}, {progress_bar}, {balance_str}, {purchases}, {basket_count}"
-    prompt_template = lang_data.get("welcome_edit_text_prompt", "Editing template '{name}'. Current text:\n\n{current_text}\n\nPlease reply with the new text. Available placeholders:\n{placeholders}")
-    prompt = prompt_template.format(name=template_name, current_text=current_text, placeholders=placeholders)
-    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_welcome")]]
-
-    # Need to potentially split if too long
-    if len(prompt) > 4096:
-        # Send current text separately if prompt + current text is too long
-        await send_message_with_retry(context.bot, query.message.chat_id, f"Current text for '{template_name}':\n\n{current_text}")
-        prompt_short_template = lang_data.get("welcome_edit_text_prompt", "Editing template '{name}'. Please reply with the new text. Available placeholders:\n{placeholders}")
-        prompt = prompt_short_template.format(name=template_name, placeholders=placeholders) # Remove current_text placeholder
-
-    await query.edit_message_text(prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-    await query.answer("Enter new template text.")
-
-
-async def handle_adm_delete_welcome_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Shows confirmation before deleting a welcome message template."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
-    if not params: return await query.answer("Error: Template name missing.", show_alert=True)
-
-    template_name = params[0]
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-
-    # Check if it's the active template or the last one
-    conn = None; active_name = None; template_count = 0
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
-        res = c.fetchone(); active_name = res[0] if res else "default"
-        c.execute("SELECT COUNT(*) FROM welcome_messages")
-        template_count = c.fetchone()[0]
-    except Exception as e: logger.error(f"DB error checking active/count welcome msg: {e}")
-    finally:
-         if conn: conn.close()
-
-    title = lang_data.get("welcome_delete_confirm_title", "⚠️ Confirm Deletion")
-    text_template = lang_data.get("welcome_delete_confirm_text", "Are you sure you want to delete the welcome message template named '{name}'?")
-    msg = f"{title}\n\n{text_template.format(name=template_name)}"
-
-    if template_name == active_name:
-        msg += lang_data.get("welcome_delete_confirm_active", "\n\n🚨 WARNING: This is the currently active template! Deleting it will revert to the default built-in message.")
-    elif template_count <= 1 and template_name == "default": # Prevent deleting last template if it's default
-         msg += lang_data.get("welcome_delete_confirm_last", "\n\n🚨 WARNING: This is the last template! Deleting it will revert to the default built-in message.")
-
-    context.user_data['confirm_action'] = f"delete_welcome_template|{template_name}"
-    keyboard = [
-        [InlineKeyboardButton(lang_data.get("welcome_delete_button_yes", "✅ Yes, Delete Template"), callback_data="confirm_yes")],
-        [InlineKeyboardButton("❌ No, Cancel", callback_data="adm_manage_welcome")]
-    ]
-    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-# --- END Welcome Message Handlers ---
-
-
-# --- Admin Message Handlers (Used when state is set) ---
-
-async def handle_adm_add_city_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles text reply when state is 'awaiting_new_city_name'."""
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    if user_id != ADMIN_ID: return
-    if not update.message or not update.message.text: return
-    if context.user_data.get("state") != "awaiting_new_city_name": return
-    text = update.message.text.strip()
-    if not text: return await send_message_with_retry(context.bot, chat_id, "City name cannot be empty.", parse_mode=None)
-    conn = None # Initialize conn
-    try:
-        conn = get_db_connection() # Use helper
-        c = conn.cursor()
-        c.execute("INSERT INTO cities (name) VALUES (?)", (text,))
-        new_city_id = c.lastrowid
-        conn.commit()
-        load_all_data() # Reload global data
-        context.user_data.pop("state", None)
-        success_text = f"✅ City '{text}' added successfully!"
-        keyboard = [[InlineKeyboardButton("⬅️ Manage Cities", callback_data="adm_manage_cities")]]
-        await send_message_with_retry(context.bot, chat_id, success_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-    except sqlite3.IntegrityError:
-        await send_message_with_retry(context.bot, chat_id, f"❌ Error: City '{text}' already exists.", parse_mode=None)
-    except sqlite3.Error as e:
-        logger.error(f"DB error adding city '{text}': {e}", exc_info=True)
-        if conn and conn.in_transaction: conn.rollback()
-        await send_message_with_retry(context.bot, chat_id, "❌ Error: Failed to add city.", parse_mode=None)
-        context.user_data.pop("state", None)
-    finally:
-        if conn: conn.close() # Close connection if opened
-
-async def handle_adm_add_district_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles text reply when state is 'awaiting_new_district_name'."""
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    if user_id != ADMIN_ID: return
-    if not update.message or not update.message.text: return
-    if context.user_data.get("state") != "awaiting_new_district_name": return
-    text = update.message.text.strip()
-    city_id_str = context.user_data.get("admin_add_district_city_id")
-    city_name = CITIES.get(city_id_str)
-    if not city_id_str or not city_name:
-        await send_message_with_retry(context.bot, chat_id, "❌ Error: Could not determine city.", parse_mode=None)
-        context.user_data.pop("state", None); context.user_data.pop("admin_add_district_city_id", None)
-        return
-    if not text: return await send_message_with_retry(context.bot, chat_id, "District name cannot be empty.", parse_mode=None)
-    conn = None # Initialize conn
-    try:
-        city_id_int = int(city_id_str)
-        conn = get_db_connection() # Use helper
-        c = conn.cursor()
-        c.execute("INSERT INTO districts (city_id, name) VALUES (?, ?)", (city_id_int, text))
-        conn.commit()
-        load_all_data() # Reload global data
-        context.user_data.pop("state", None); context.user_data.pop("admin_add_district_city_id", None)
-        success_text = f"✅ District '{text}' added to {city_name}!"
-        keyboard = [[InlineKeyboardButton("⬅️ Manage Districts", callback_data=f"adm_manage_districts_city|{city_id_str}")]]
-        await send_message_with_retry(context.bot, chat_id, success_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-    except sqlite3.IntegrityError:
-        await send_message_with_retry(context.bot, chat_id, f"❌ Error: District '{text}' already exists in {city_name}.", parse_mode=None)
-    except (sqlite3.Error, ValueError) as e:
-        logger.error(f"DB/Value error adding district '{text}' to city {city_id_str}: {e}", exc_info=True)
-        if conn and conn.in_transaction: conn.rollback()
-        await send_message_with_retry(context.bot, chat_id, "❌ Error: Failed to add district.", parse_mode=None)
-        context.user_data.pop("state", None); context.user_data.pop("admin_add_district_city_id", None)
-    finally:
-        if conn: conn.close() # Close connection if opened
-
-async def handle_adm_edit_district_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles text reply when state is 'awaiting_edit_district_name'."""
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    if user_id != ADMIN_ID: return
-    if not update.message or not update.message.text: return
-    if context.user_data.get("state") != "awaiting_edit_district_name": return
-    new_name = update.message.text.strip()
-    city_id_str = context.user_data.get("edit_city_id")
-    dist_id_str = context.user_data.get("edit_district_id")
-    city_name = CITIES.get(city_id_str)
-    old_district_name = None
-    conn = None # Initialize conn
-    try:
-        conn = get_db_connection() # Use helper
-        c = conn.cursor()
-        # Use column name
-        c.execute("SELECT name FROM districts WHERE id = ? AND city_id = ?", (int(dist_id_str), int(city_id_str)))
-        res = c.fetchone(); old_district_name = res['name'] if res else None
-    except (sqlite3.Error, ValueError) as e: logger.error(f"Failed to fetch old district name for edit: {e}")
-    finally:
-        if conn: conn.close() # Close connection if opened
-    if not city_id_str or not dist_id_str or not city_name or old_district_name is None:
-        await send_message_with_retry(context.bot, chat_id, "❌ Error: Could not find district/city.", parse_mode=None)
-        context.user_data.pop("state", None); context.user_data.pop("edit_city_id", None); context.user_data.pop("edit_district_id", None)
-        return
-    if not new_name: return await send_message_with_retry(context.bot, chat_id, "New district name cannot be empty.", parse_mode=None)
-    if new_name == old_district_name:
-        await send_message_with_retry(context.bot, chat_id, "New name is the same. No changes.", parse_mode=None)
-        context.user_data.pop("state", None); context.user_data.pop("edit_city_id", None); context.user_data.pop("edit_district_id", None)
-        keyboard = [[InlineKeyboardButton("⬅️ Manage Districts", callback_data=f"adm_manage_districts_city|{city_id_str}")]]
-        return await send_message_with_retry(context.bot, chat_id, "No changes detected.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-    conn = None # Re-initialize for update transaction
-    try:
-        city_id_int, dist_id_int = int(city_id_str), int(dist_id_str)
-        conn = get_db_connection() # Use helper
-        c = conn.cursor()
-        c.execute("BEGIN")
-        c.execute("UPDATE districts SET name = ? WHERE id = ? AND city_id = ?", (new_name, dist_id_int, city_id_int))
-        # Update products table as well
-        c.execute("UPDATE products SET district = ? WHERE district = ? AND city = ?", (new_name, old_district_name, city_name))
-        conn.commit()
-        load_all_data() # Reload global data
-        context.user_data.pop("state", None); context.user_data.pop("edit_city_id", None); context.user_data.pop("edit_district_id", None)
-        success_text = f"✅ District updated to '{new_name}' successfully!"
-        keyboard = [[InlineKeyboardButton("⬅️ Manage Districts", callback_data=f"adm_manage_districts_city|{city_id_str}")]]
-        await send_message_with_retry(context.bot, chat_id, success_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-    except sqlite3.IntegrityError:
-        await send_message_with_retry(context.bot, chat_id, f"❌ Error: District '{new_name}' already exists.", parse_mode=None)
-    except (sqlite3.Error, ValueError) as e:
-        logger.error(f"DB/Value error updating district {dist_id_str}: {e}", exc_info=True)
-        if conn and conn.in_transaction: conn.rollback()
-        await send_message_with_retry(context.bot, chat_id, "❌ Error: Failed to update district.", parse_mode=None)
-        context.user_data.pop("state", None); context.user_data.pop("edit_city_id", None); context.user_data.pop("edit_district_id", None)
-    finally:
-         if conn: conn.close() # Close connection if opened
-
-
-async def handle_adm_edit_city_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles text reply when state is 'awaiting_edit_city_name'."""
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    if user_id != ADMIN_ID: return
-    if not update.message or not update.message.text: return
-    if context.user_data.get("state") != "awaiting_edit_city_name": return
-    new_name = update.message.text.strip()
-    city_id_str = context.user_data.get("edit_city_id")
-    old_name = None
-    conn = None # Initialize conn
-    try:
-        conn = get_db_connection() # Use helper
-        c = conn.cursor()
-        # Use column name
-        c.execute("SELECT name FROM cities WHERE id = ?", (int(city_id_str),))
-        res = c.fetchone(); old_name = res['name'] if res else None
-    except (sqlite3.Error, ValueError) as e: logger.error(f"Failed to fetch old city name for edit: {e}")
-    finally:
-        if conn: conn.close() # Close connection if opened
-    if not city_id_str or old_name is None:
-        await send_message_with_retry(context.bot, chat_id, "❌ Error: Could not find city.", parse_mode=None)
-        context.user_data.pop("state", None); context.user_data.pop("edit_city_id", None)
-        return
-    if not new_name: return await send_message_with_retry(context.bot, chat_id, "New city name cannot be empty.", parse_mode=None)
-    if new_name == old_name:
-        await send_message_with_retry(context.bot, chat_id, "New name is the same. No changes.", parse_mode=None)
-        context.user_data.pop("state", None); context.user_data.pop("edit_city_id", None)
-        keyboard = [[InlineKeyboardButton("⬅️ Manage Cities", callback_data="adm_manage_cities")]]
-        return await send_message_with_retry(context.bot, chat_id, "No changes detected.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-    conn = None # Re-initialize for update transaction
-    try:
-        city_id_int = int(city_id_str)
-        conn = get_db_connection() # Use helper
-        c = conn.cursor()
-        c.execute("BEGIN")
-        c.execute("UPDATE cities SET name = ? WHERE id = ?", (new_name, city_id_int))
-        # Update products table as well
-        c.execute("UPDATE products SET city = ? WHERE city = ?", (new_name, old_name))
-        conn.commit()
-        load_all_data() # Reload global data
-        context.user_data.pop("state", None); context.user_data.pop("edit_city_id", None)
-        success_text = f"✅ City updated to '{new_name}' successfully!"
-        keyboard = [[InlineKeyboardButton("⬅️ Manage Cities", callback_data="adm_manage_cities")]]
-        await send_message_with_retry(context.bot, chat_id, success_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-    except sqlite3.IntegrityError:
-        await send_message_with_retry(context.bot, chat_id, f"❌ Error: City '{new_name}' already exists.", parse_mode=None)
-    except (sqlite3.Error, ValueError) as e:
-        logger.error(f"DB/Value error updating city {city_id_str}: {e}", exc_info=True)
-        if conn and conn.in_transaction: conn.rollback()
-        await send_message_with_retry(context.bot, chat_id, "❌ Error: Failed to update city.", parse_mode=None)
-        context.user_data.pop("state", None); context.user_data.pop("edit_city_id", None)
-    finally:
-         if conn: conn.close() # Close connection if opened
-
-
-async def handle_adm_custom_size_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles text reply when state is 'awaiting_custom_size'."""
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    if user_id != ADMIN_ID: return
-    if not update.message or not update.message.text: return
-    if context.user_data.get("state") != "awaiting_custom_size": return
-    custom_size = update.message.text.strip()
-    if not custom_size: return await send_message_with_retry(context.bot, chat_id, "Custom size cannot be empty.", parse_mode=None)
-    if len(custom_size) > 50: return await send_message_with_retry(context.bot, chat_id, "Custom size too long (max 50 chars).", parse_mode=None)
-    if not all(k in context.user_data for k in ["admin_city", "admin_district", "admin_product_type"]):
-        await send_message_with_retry(context.bot, chat_id, "❌ Error: Context lost.", parse_mode=None)
-        context.user_data.pop("state", None)
-        return
-    context.user_data["pending_drop_size"] = custom_size
-    context.user_data["state"] = "awaiting_price"
-    keyboard = [[InlineKeyboardButton("❌ Cancel Add", callback_data="cancel_add")]]
-    await send_message_with_retry(context.bot, chat_id, f"Custom size set to '{custom_size}'. Reply with the price (e.g., 12.50):",
-                            reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-async def handle_adm_price_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles text reply when state is 'awaiting_price'."""
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    if user_id != ADMIN_ID: return
-    if not update.message or not update.message.text: return
-    if context.user_data.get("state") != "awaiting_price": return
-    price_text = update.message.text.strip().replace(',', '.')
-    try:
-        price = round(float(price_text), 2)
-        if price <= 0: raise ValueError("Price must be positive")
-    except ValueError:
-        return await send_message_with_retry(context.bot, chat_id, "❌ Invalid Price Format. Enter positive number (e.g., 12.50):", parse_mode=None)
-    if not all(k in context.user_data for k in ["admin_city", "admin_district", "admin_product_type", "pending_drop_size"]):
-        await send_message_with_retry(context.bot, chat_id, "❌ Error: Context lost.", parse_mode=None)
-        context.user_data.pop("state", None); context.user_data.pop("pending_drop_size", None)
-        return
-    context.user_data["pending_drop_price"] = price
-    context.user_data["state"] = "awaiting_drop_details"
-    keyboard = [[InlineKeyboardButton("❌ Cancel Add", callback_data="cancel_add")]]
-    price_f = format_currency(price)
-    await send_message_with_retry(context.bot, chat_id,
-                                  f"Price set to {price_f} EUR. Now send drop details:\n"
-                                  f"- Send text only, OR\n"
-                                  f"- Send photo(s)/video(s) WITH text caption, OR\n"
-                                  f"- Forward a message containing media and text.",
-                                  reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-async def handle_adm_bot_media_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the media message when state is 'awaiting_bot_media'."""
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    if user_id != ADMIN_ID: return
-    if not update.message: return
-    if context.user_data.get("state") != "awaiting_bot_media": return
-
-    new_media_type, file_to_download, file_extension, file_id = None, None, None, None
-    if update.message.photo: file_to_download, new_media_type, file_extension, file_id = update.message.photo[-1], "photo", ".jpg", update.message.photo[-1].file_id
-    elif update.message.video: file_to_download, new_media_type, file_extension, file_id = update.message.video, "video", ".mp4", update.message.video.file_id
-    elif update.message.animation: file_to_download, new_media_type, file_extension, file_id = update.message.animation, "gif", ".mp4", update.message.animation.file_id
-    elif update.message.document and update.message.document.mime_type and 'gif' in update.message.document.mime_type.lower():
-         file_to_download, new_media_type, file_extension, file_id = update.message.document, "gif", ".gif", update.message.document.file_id
-    else: return await send_message_with_retry(context.bot, chat_id, "❌ Invalid Media Type. Send photo, video, or GIF.", parse_mode=None)
-    if not file_to_download or not file_id: return await send_message_with_retry(context.bot, chat_id, "❌ Could not identify media file.", parse_mode=None)
-
-    context.user_data.pop("state", None)
-    await send_message_with_retry(context.bot, chat_id, "⏳ Downloading and saving new media...", parse_mode=None)
-
-    final_media_path = os.path.join(MEDIA_DIR, f"bot_media{file_extension}")
-    temp_download_path = final_media_path + ".tmp"
-
-    try:
-        logger.info(f"Downloading new bot media ({new_media_type}) ID {file_id} to {temp_download_path}")
-        file_obj = await context.bot.get_file(file_id)
-        await file_obj.download_to_drive(custom_path=temp_download_path)
-        logger.info("Media download successful to temp path.")
-
-        if not await asyncio.to_thread(os.path.exists, temp_download_path) or await asyncio.to_thread(os.path.getsize, temp_download_path) == 0:
-             raise IOError("Downloaded file is empty or missing.")
-
-        old_media_path_global = BOT_MEDIA.get("path")
-        if old_media_path_global and old_media_path_global != final_media_path and await asyncio.to_thread(os.path.exists, old_media_path_global):
-            try:
-                await asyncio.to_thread(os.remove, old_media_path_global)
-                logger.info(f"Removed old bot media file: {old_media_path_global}")
-            except OSError as e:
-                logger.warning(f"Could not remove old bot media file '{old_media_path_global}': {e}")
-
-        await asyncio.to_thread(shutil.move, temp_download_path, final_media_path)
-        logger.info(f"Moved media to final path: {final_media_path}")
-
-        BOT_MEDIA["type"] = new_media_type
-        BOT_MEDIA["path"] = final_media_path
-
-        try:
-            def write_json_sync(path, data):
-                try:
-                    with open(path, 'w') as f:
-                        json.dump(data, f, indent=4)
-                    logger.info(f"Successfully wrote updated BOT_MEDIA to {path}: {data}")
-                    return True
-                except Exception as e_sync:
-                    logger.error(f"Failed during synchronous write to {path}: {e_sync}")
-                    return False
-
-            write_successful = await asyncio.to_thread(write_json_sync, BOT_MEDIA_JSON_PATH, BOT_MEDIA)
-
-            if not write_successful:
-                raise IOError(f"Failed to write bot media configuration to {BOT_MEDIA_JSON_PATH}")
-
-        except Exception as e:
-            logger.error(f"Error during bot media JSON writing process: {e}")
-            await send_message_with_retry(context.bot, chat_id, f"❌ Error saving media configuration: {e}", parse_mode=None)
-            if await asyncio.to_thread(os.path.exists, final_media_path):
-                 try: await asyncio.to_thread(os.remove, final_media_path)
-                 except OSError: pass
-            return
-
-        await send_message_with_retry(context.bot, chat_id, "✅ Bot Media Updated Successfully!", parse_mode=None)
-        keyboard = [[InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="admin_menu")]]
-        await send_message_with_retry(context.bot, chat_id, "Changes applied.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-    except (telegram_error.TelegramError, IOError, OSError) as e:
-        logger.error(f"Error downloading/saving bot media: {e}")
-        await send_message_with_retry(context.bot, chat_id, "❌ Error downloading or saving media. Please try again.", parse_mode=None)
-        if await asyncio.to_thread(os.path.exists, temp_download_path):
-            try: await asyncio.to_thread(os.remove, temp_download_path)
-            except OSError: pass
-    except Exception as e:
-        logger.error(f"Unexpected error updating bot media: {e}", exc_info=True)
-        await send_message_with_retry(context.bot, chat_id, "❌ An unexpected error occurred.", parse_mode=None)
-    finally:
-        if 'temp_download_path' in locals() and await asyncio.to_thread(os.path.exists, temp_download_path):
-             try: await asyncio.to_thread(os.remove, temp_download_path)
-             except OSError as e: logger.warning(f"Could not remove temp dl file '{temp_download_path}': {e}")
-
-
-# --- Add Product Type Handlers ---
-async def handle_adm_add_type_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles text reply when state is 'awaiting_new_type_name'."""
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-
-    if user_id != ADMIN_ID: return
-    if not update.message or not update.message.text: return
-    if context.user_data.get("state") != "awaiting_new_type_name": return
-
-    type_name = update.message.text.strip()
-    if not type_name: return await send_message_with_retry(context.bot, chat_id, "Product type name cannot be empty.", parse_mode=None)
-    if len(type_name) > 100: return await send_message_with_retry(context.bot, chat_id, "Product type name too long (max 100 chars).", parse_mode=None)
-    if type_name.lower() in [pt.lower() for pt in PRODUCT_TYPES.keys()]:
-        return await send_message_with_retry(context.bot, chat_id, f"❌ Error: Type '{type_name}' already exists.", parse_mode=None)
-
-    context.user_data["new_type_name"] = type_name
-    context.user_data["state"] = "awaiting_new_type_emoji"
-    prompt_text = lang_data.get("admin_enter_type_emoji", "✍️ Please reply with a single emoji for the product type:")
-    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_types")]]
-    await send_message_with_retry(context.bot, chat_id, f"Type name set to: {type_name}\n\n{prompt_text}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-
-async def handle_adm_add_type_emoji_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the emoji reply when state is 'awaiting_new_type_emoji'."""
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-
-    if user_id != ADMIN_ID: return
-    if not update.message or not update.message.text: return
-    if context.user_data.get("state") != "awaiting_new_type_emoji": return
-
-    emoji = update.message.text.strip()
-    type_name = context.user_data.get("new_type_name")
-
-    if not type_name:
-        logger.error(f"State is awaiting_new_type_emoji but new_type_name missing for user {user_id}")
-        context.user_data.pop("state", None)
-        await send_message_with_retry(context.bot, chat_id, "❌ Error: Context lost. Please start adding the type again.", parse_mode=None)
-        return
-
-    if len(emoji) != 1: # Basic check
-        invalid_emoji_msg = lang_data.get("admin_invalid_emoji", "❌ Invalid input. Please send a single emoji.")
-        await send_message_with_retry(context.bot, chat_id, invalid_emoji_msg, parse_mode=None)
-        return
-
-    conn=None
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("INSERT INTO product_types (name, emoji) VALUES (?, ?)", (type_name, emoji))
-        conn.commit()
-        load_all_data()
-        context.user_data.pop("state", None)
-        context.user_data.pop("new_type_name", None)
-
-        emoji_set_msg = lang_data.get("admin_type_emoji_set", "Emoji set to {emoji}.")
-        success_text = f"✅ Product Type '{type_name}' added!\n{emoji_set_msg.format(emoji=emoji)}"
-        keyboard = [[InlineKeyboardButton("⬅️ Manage Types", callback_data="adm_manage_types")]]
-        await send_message_with_retry(context.bot, chat_id, success_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-    except sqlite3.IntegrityError:
-        await send_message_with_retry(context.bot, chat_id, f"❌ Error: Product type '{type_name}' already exists.", parse_mode=None)
-        context.user_data.pop("state", None); context.user_data.pop("new_type_name", None)
-    except sqlite3.Error as e:
-        logger.error(f"DB error adding product type '{type_name}' with emoji '{emoji}': {e}", exc_info=True)
-        if conn and conn.in_transaction: conn.rollback()
-        await send_message_with_retry(context.bot, chat_id, "❌ Error: Failed to add type.", parse_mode=None)
-        context.user_data.pop("state", None); context.user_data.pop("new_type_name", None)
-    finally:
-        if conn: conn.close()
-
-
-# --- Edit Product Type Emoji Message Handler ---
-async def handle_adm_edit_type_emoji_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the emoji reply when state is 'awaiting_edit_type_emoji'."""
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-
-    if user_id != ADMIN_ID: return
-    if not update.message or not update.message.text: return
-    if context.user_data.get("state") != "awaiting_edit_type_emoji": return
-
-    new_emoji = update.message.text.strip()
-    type_name = context.user_data.get("edit_type_name")
-
-    if not type_name:
-        logger.error(f"State is awaiting_edit_type_emoji but edit_type_name missing for user {user_id}")
-        context.user_data.pop("state", None)
-        await send_message_with_retry(context.bot, chat_id, "❌ Error: Context lost. Please start editing the type again.", parse_mode=None)
-        return
-
-    if len(new_emoji) != 1: # Basic check
-        invalid_emoji_msg = lang_data.get("admin_invalid_emoji", "❌ Invalid input. Please send a single emoji.")
-        await send_message_with_retry(context.bot, chat_id, invalid_emoji_msg, parse_mode=None)
-        return
-
-    conn = None
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        update_result = c.execute("UPDATE product_types SET emoji = ? WHERE name = ?", (new_emoji, type_name))
-        conn.commit()
-
-        if update_result.rowcount == 0:
-            logger.warning(f"Attempted to update emoji for non-existent type: {type_name}")
-            await send_message_with_retry(context.bot, chat_id, f"❌ Error: Type '{type_name}' not found.", parse_mode=None)
-        else:
-            load_all_data()
-            success_msg_template = lang_data.get("admin_type_emoji_updated", "✅ Emoji updated successfully for {type_name}!")
-            success_text = success_msg_template.format(type_name=type_name) + f" New emoji: {new_emoji}"
-            keyboard = [[InlineKeyboardButton("⬅️ Manage Types", callback_data="adm_manage_types")]]
-            await send_message_with_retry(context.bot, chat_id, success_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-        context.user_data.pop("state", None)
-        context.user_data.pop("edit_type_name", None)
-
-    except sqlite3.Error as e:
-        logger.error(f"DB error updating emoji for type '{type_name}': {e}", exc_info=True)
-        if conn and conn.in_transaction: conn.rollback()
-        await send_message_with_retry(context.bot, chat_id, "❌ Error: Failed to update emoji.", parse_mode=None)
-        context.user_data.pop("state", None); context.user_data.pop("edit_type_name", None)
-    finally:
-        if conn: conn.close()
-
-
-# --- Message Handlers for Discount Creation ---
-async def process_discount_code_input(update: Update, context: ContextTypes.DEFAULT_TYPE, code_text: str):
-    """Shared logic to process entered/generated discount code and ask for type."""
-    chat_id = update.effective_chat.id
-    query = update.callback_query
-    if not code_text:
-        msg = "Code cannot be empty. Please try again."
-        if query: await query.answer(msg, show_alert=True)
-        else: await send_message_with_retry(context.bot, chat_id, msg, parse_mode=None)
-        return
-    if len(code_text) > 50:
-        msg = "Code too long (max 50 chars)."
-        if query: await query.answer(msg, show_alert=True)
-        else: await send_message_with_retry(context.bot, chat_id, msg, parse_mode=None)
-        return
-    conn = None # Initialize conn
-    try:
-        conn = get_db_connection() # Use helper
-        c = conn.cursor()
-        c.execute("SELECT 1 FROM discount_codes WHERE code = ?", (code_text,))
-        if c.fetchone():
-            error_msg = f"❌ Error: Discount code '{code_text}' already exists."
-            if query:
-                try: await query.edit_message_text(error_msg, parse_mode=None)
-                except telegram_error.BadRequest: await send_message_with_retry(context.bot, chat_id, error_msg, parse_mode=None)
-            else: await send_message_with_retry(context.bot, chat_id, error_msg, parse_mode=None)
-            return
-    except sqlite3.Error as e:
-        logger.error(f"DB error checking discount code uniqueness: {e}")
-        error_msg = "❌ Database error checking code uniqueness."
-        if query: await query.answer("DB Error.", show_alert=True)
-        await send_message_with_retry(context.bot, chat_id, error_msg, parse_mode=None)
-        context.user_data.pop('state', None)
-        return
-    finally:
-        if conn: conn.close() # Close connection if opened
-    if 'new_discount_info' not in context.user_data: context.user_data['new_discount_info'] = {}
-    context.user_data['new_discount_info']['code'] = code_text
-    context.user_data['state'] = 'awaiting_discount_type'
-    keyboard = [
-        [InlineKeyboardButton("％ Percentage", callback_data="adm_set_discount_type|percentage"),
-         InlineKeyboardButton("€ Fixed Amount", callback_data="adm_set_discount_type|fixed")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_discounts")]
-    ]
-    prompt_msg = f"Code set to: {code_text}\n\nSelect the discount type:"
-    if query:
-        try: await query.edit_message_text(prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-        except telegram_error.BadRequest: await query.answer() # Ignore if not modified
-    else: await send_message_with_retry(context.bot, chat_id, prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-
-async def handle_adm_discount_code_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the admin entering the discount code text via message."""
-    user_id = update.effective_user.id
-    if user_id != ADMIN_ID: return
-    if context.user_data.get("state") != "awaiting_discount_code": return
-    if not update.message or not update.message.text: return
-    code_text = update.message.text.strip()
-    await process_discount_code_input(update, context, code_text)
-
-
-async def handle_adm_discount_value_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the admin entering the discount value and saves the code."""
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    if user_id != ADMIN_ID: return
-    if context.user_data.get("state") != "awaiting_discount_value": return
-    if not update.message or not update.message.text: return
-    value_text = update.message.text.strip().replace(',', '.')
-    discount_info = context.user_data.get('new_discount_info', {})
-    code = discount_info.get('code'); dtype = discount_info.get('type')
-    if not code or not dtype:
-        await send_message_with_retry(context.bot, chat_id, "❌ Error: Discount context lost.", parse_mode=None)
-        context.user_data.pop("state", None); context.user_data.pop("new_discount_info", None)
-        return
-    conn = None # Initialize conn
-    try:
-        value = float(value_text)
-        if value <= 0: raise ValueError("Discount value must be positive.")
-        if dtype == 'percentage' and (value > 100): raise ValueError("Percentage cannot exceed 100.")
-        conn = get_db_connection() # Use helper
-        c = conn.cursor()
-        c.execute("INSERT INTO discount_codes (code, discount_type, value, created_date, is_active) VALUES (?, ?, ?, ?, 1)",
-                  (code, dtype, value, datetime.now().isoformat()))
-        conn.commit()
-        logger.info(f"Admin {user_id} added discount code: {code} ({dtype}, {value})")
-        context.user_data.pop("state", None); context.user_data.pop("new_discount_info", None)
-        await send_message_with_retry(context.bot, chat_id, f"✅ Discount code '{code}' added!", parse_mode=None)
-        keyboard = [[InlineKeyboardButton("🏷️ View Discount Codes", callback_data="adm_manage_discounts")]]
-        await send_message_with_retry(context.bot, chat_id, "Returning to discount management.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-    except ValueError as e:
-        await send_message_with_retry(context.bot, chat_id, f"❌ Invalid Value: {e}. Enter valid positive number.", parse_mode=None)
-    except sqlite3.Error as e:
-        logger.error(f"DB error saving discount code '{code}': {e}", exc_info=True)
-        if conn and conn.in_transaction: conn.rollback()
-        await send_message_with_retry(context.bot, chat_id, "❌ Database error saving code.", parse_mode=None)
-        context.user_data.pop("state", None); context.user_data.pop("new_discount_info", None)
-    finally:
-        if conn: conn.close() # Close connection if opened
-
-
-# --- Message Handler for Broadcast Inactive Days ---
-async def handle_adm_broadcast_inactive_days_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the admin entering the number of days for inactive broadcast."""
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    if user_id != ADMIN_ID: return
-    if context.user_data.get("state") != 'awaiting_broadcast_inactive_days': return
-    if not update.message or not update.message.text: return
-
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-    invalid_days_msg = lang_data.get("broadcast_invalid_days", "❌ Invalid number of days. Please enter a positive whole number.")
-    days_too_large_msg = lang_data.get("broadcast_days_too_large", "❌ Number of days is too large. Please enter a smaller number.")
-
-    try:
-        days = int(update.message.text.strip())
-        if days <= 0:
-            await send_message_with_retry(context.bot, chat_id, invalid_days_msg, parse_mode=None)
-            return # Keep state
-        if days > 365 * 5: # Arbitrary limit to prevent nonsense
-            await send_message_with_retry(context.bot, chat_id, days_too_large_msg, parse_mode=None)
-            return # Keep state
-
-        context.user_data['broadcast_target_value'] = days
-        context.user_data['state'] = 'awaiting_broadcast_message' # Change state
-
-        ask_msg_text = lang_data.get("broadcast_ask_message", "📝 Now send the message content (text, photo, video, or GIF with caption):")
-        keyboard = [[InlineKeyboardButton("❌ Cancel Broadcast", callback_data="cancel_broadcast")]]
-        await send_message_with_retry(context.bot, chat_id, f"Targeting users inactive for >= {days} days.\n\n{ask_msg_text}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-    except ValueError:
-        await send_message_with_retry(context.bot, chat_id, invalid_days_msg, parse_mode=None)
-        return # Keep state
-
-# --- Message Handler for Broadcast Content ---
-async def handle_adm_broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles receiving the message content for the broadcast, AFTER target is set."""
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    if user_id != ADMIN_ID: return
-    if context.user_data.get("state") != 'awaiting_broadcast_message': return
-    if not update.message: return
-
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-
-    text = (update.message.text or update.message.caption or "").strip()
-    media_file_id, media_type = None, None
-    if update.message.photo: media_file_id, media_type = update.message.photo[-1].file_id, "photo"
-    elif update.message.video: media_file_id, media_type = update.message.video.file_id, "video"
-    elif update.message.animation: media_file_id, media_type = update.message.animation.file_id, "gif"
-
-    if not text and not media_file_id:
-        await send_message_with_retry(context.bot, chat_id, "Broadcast message cannot be empty. Please send text or media.", parse_mode=None)
-        return
-
-    target_type = context.user_data.get('broadcast_target_type', 'all')
-    target_value = context.user_data.get('broadcast_target_value')
-
-    context.user_data['broadcast_content'] = {
-        'text': text, 'media_file_id': media_file_id, 'media_type': media_type,
-        'target_type': target_type, 'target_value': target_value
-    }
-    context.user_data.pop('state', None)
-
-    confirm_title = lang_data.get("broadcast_confirm_title", "📢 Confirm Broadcast")
-    target_desc = lang_data.get("broadcast_confirm_target_all", "Target: All Users")
-    if target_type == 'city': target_desc = lang_data.get("broadcast_confirm_target_city", "Target: Last Purchase in {city}").format(city=target_value)
-    elif target_type == 'status': target_desc = lang_data.get("broadcast_confirm_target_status", "Target: Status - {status}").format(status=target_value)
-    elif target_type == 'inactive': target_desc = lang_data.get("broadcast_confirm_target_inactive", "Target: Inactive >= {days} days").format(days=target_value)
-
-    preview_label = lang_data.get("broadcast_confirm_preview", "Preview:")
-    preview_msg = f"{confirm_title}\n\n{target_desc}\n\n{preview_label}\n"
-    if media_file_id: preview_msg += f"{media_type.capitalize()} attached\n"
-    text_preview = text[:500] + ('...' if len(text) > 500 else '')
-    preview_msg += text_preview if text else "(No text)"
-    preview_msg += f"\n\n{lang_data.get('broadcast_confirm_ask', 'Send this message?')}"
-
-    keyboard = [
-        [InlineKeyboardButton("✅ Yes, Send Broadcast", callback_data="confirm_broadcast")],
-        [InlineKeyboardButton("❌ No, Cancel", callback_data="cancel_broadcast")]
-    ]
-    await send_message_with_retry(context.bot, chat_id, preview_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-
-# --- Welcome Message Management Handlers ---
-
-async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Displays the welcome message template management screen."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-
-    templates = get_welcome_message_templates() # Sync function
-    conn = None
-    active_template_name = "default" # Fallback
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
-        res = c.fetchone()
-        if res: active_template_name = res['setting_value']
-    except Exception as e:
-        logger.error(f"Error fetching active welcome template name: {e}")
-    finally:
-        if conn: conn.close()
-
-    title = lang_data.get("manage_welcome_title", "⚙️ Manage Welcome Messages")
-    prompt = lang_data.get("manage_welcome_prompt", "Select a template to manage or activate:")
-    msg = f"{title}\n\n{prompt}\n"
-    keyboard = []
-
-    if not templates:
-        msg += "\nNo templates found. Add one?"
-    else:
-        for template in templates:
-            name = template['name']
-            is_active = (name == active_template_name)
-            active_indicator = lang_data.get("welcome_template_active", " (Active ✅)") if is_active else lang_data.get("welcome_template_inactive", "")
-            row = [
-                InlineKeyboardButton(f"{name}{active_indicator}", callback_data=f"adm_edit_welcome|{name}"),
-            ]
-            if not is_active:
-                row.append(InlineKeyboardButton(lang_data.get("welcome_button_activate", "✅ Activate"), callback_data=f"adm_activate_welcome|{name}"))
-            # Allow deleting only if more than one template exists OR if it's not the default one
-            if len(templates) > 1 or name != "default":
-                row.append(InlineKeyboardButton(lang_data.get("welcome_button_delete", "🗑️ Delete"), callback_data=f"adm_delete_welcome_confirm|{name}"))
-            keyboard.append(row)
-
-    keyboard.append([InlineKeyboardButton(lang_data.get("welcome_button_add_new", "➕ Add New Template"), callback_data="adm_add_welcome_start")])
-    keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")])
-
-    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-async def handle_adm_activate_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Activates the selected welcome message template."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
-    if not params: return await query.answer("Error: Template name missing.", show_alert=True)
-
-    template_name = params[0]
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-
-    success = set_active_welcome_message(template_name)
-
-    if success:
-        msg_template = lang_data.get("welcome_activate_success", "✅ Template '{name}' activated.")
-        await query.answer(msg_template.format(name=template_name))
-        await handle_adm_manage_welcome(update, context) # Refresh menu
-    else:
-        msg_template = lang_data.get("welcome_activate_fail", "❌ Failed to activate template '{name}'.")
-        await query.answer(msg_template.format(name=template_name), show_alert=True)
-
-async def handle_adm_add_welcome_start(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Starts the process of adding a new welcome message template."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-
-    context.user_data['state'] = 'awaiting_welcome_template_name'
-    prompt = lang_data.get("welcome_add_name_prompt", "Enter a unique short name for the new template (e.g., 'default', 'promo_weekend'):")
-    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_welcome")]]
-    await query.edit_message_text(prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-    await query.answer("Enter template name in chat.")
-
-async def handle_adm_edit_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Shows the current template text and prompts for a new one."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
-    if not params: return await query.answer("Error: Template name missing.", show_alert=True)
-
-    template_name = params[0]
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-
-    templates = get_welcome_message_templates()
-    current_text = DEFAULT_WELCOME_MESSAGE # Fallback
-    for t in templates:
-        if t['name'] == template_name:
-            current_text = t['template_text']
-            break
-    else: # If loop completes without finding
-        await query.answer("Template not found.", show_alert=True)
-        return await handle_adm_manage_welcome(update, context)
-
-    context.user_data['state'] = 'awaiting_welcome_template_edit'
-    context.user_data['editing_welcome_template_name'] = template_name
-    placeholders = "{username}, {status}, {progress_bar}, {balance_str}, {purchases}, {basket_count}"
-    prompt_template = lang_data.get("welcome_edit_text_prompt", "Editing template '{name}'. Current text:\n\n{current_text}\n\nPlease reply with the new text. Available placeholders:\n{placeholders}")
-    prompt = prompt_template.format(name=template_name, current_text=current_text, placeholders=placeholders)
-    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_welcome")]]
-
-    # Need to potentially split if too long
-    if len(prompt) > 4096:
-        # Send current text separately if prompt + current text is too long
-        await send_message_with_retry(context.bot, query.message.chat_id, f"Current text for '{template_name}':\n\n{current_text}")
-        prompt_short_template = lang_data.get("welcome_edit_text_prompt", "Editing template '{name}'. Please reply with the new text. Available placeholders:\n{placeholders}")
-        prompt = prompt_short_template.format(name=template_name, placeholders=placeholders) # Remove current_text placeholder
-
-    await query.edit_message_text(prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-    await query.answer("Enter new template text.")
-
-
-async def handle_adm_delete_welcome_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Shows confirmation before deleting a welcome message template."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
-    if not params: return await query.answer("Error: Template name missing.", show_alert=True)
-
-    template_name = params[0]
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-
-    # Check if it's the active template or the last one
-    conn = None; active_name = None; template_count = 0
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
-        res = c.fetchone(); active_name = res[0] if res else "default"
-        c.execute("SELECT COUNT(*) FROM welcome_messages")
-        template_count = c.fetchone()[0]
-    except Exception as e: logger.error(f"DB error checking active/count welcome msg: {e}")
-    finally:
-         if conn: conn.close()
-
-    title = lang_data.get("welcome_delete_confirm_title", "⚠️ Confirm Deletion")
-    text_template = lang_data.get("welcome_delete_confirm_text", "Are you sure you want to delete the welcome message template named '{name}'?")
-    msg = f"{title}\n\n{text_template.format(name=template_name)}"
-
-    if template_name == active_name:
-        msg += lang_data.get("welcome_delete_confirm_active", "\n\n🚨 WARNING: This is the currently active template! Deleting it will revert to the default built-in message.")
-    elif template_count <= 1 and template_name == "default": # Prevent deleting last template if it's default
-         msg += lang_data.get("welcome_delete_confirm_last", "\n\n🚨 WARNING: This is the last template! Deleting it will revert to the default built-in message.")
-
-    context.user_data['confirm_action'] = f"delete_welcome_template|{template_name}"
-    keyboard = [
-        [InlineKeyboardButton(lang_data.get("welcome_delete_button_yes", "✅ Yes, Delete Template"), callback_data="confirm_yes")],
-        [InlineKeyboardButton("❌ No, Cancel", callback_data="adm_manage_welcome")]
-    ]
-    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
 # --- Message Handlers for Welcome Message Management ---
 
@@ -3684,6 +2723,9 @@ async def handle_adm_welcome_template_text_message(update: Update, context: Cont
         await send_message_with_retry(context.bot, chat_id, "❌ Template text too long (max ~3500 chars). Please shorten it.")
         return # Keep state
 
+    success = False
+    template_name = None
+
     # Determine if adding or editing
     if current_state == 'awaiting_welcome_template_text':
         template_name = context.user_data.get('new_welcome_template_name')
@@ -3691,7 +2733,7 @@ async def handle_adm_welcome_template_text_message(update: Update, context: Cont
             logger.error("State is awaiting_welcome_template_text but name is missing.")
             await send_message_with_retry(context.bot, chat_id, "❌ Error: Context lost. Please start again.", parse_mode=None)
             context.user_data.pop('state', None)
-            return
+            return # Or redirect to admin menu
 
         success = add_welcome_message_template(template_name, template_text)
         if success:
@@ -3701,10 +2743,9 @@ async def handle_adm_welcome_template_text_message(update: Update, context: Cont
             msg_template = lang_data.get("welcome_add_fail", "❌ Failed to add welcome message template.")
             await send_message_with_retry(context.bot, chat_id, msg_template, parse_mode=None)
 
+        # Clean up state for adding
         context.user_data.pop('state', None)
         context.user_data.pop('new_welcome_template_name', None)
-        # Simulate callback to refresh the menu
-        await handle_adm_manage_welcome(update, context)
 
     elif current_state == 'awaiting_welcome_template_edit':
         template_name = context.user_data.get('editing_welcome_template_name')
@@ -3712,7 +2753,7 @@ async def handle_adm_welcome_template_text_message(update: Update, context: Cont
             logger.error("State is awaiting_welcome_template_edit but name is missing.")
             await send_message_with_retry(context.bot, chat_id, "❌ Error: Context lost. Please start again.", parse_mode=None)
             context.user_data.pop('state', None)
-            return
+            return # Or redirect to admin menu
 
         success = update_welcome_message_template(template_name, template_text)
         if success:
@@ -3722,7 +2763,55 @@ async def handle_adm_welcome_template_text_message(update: Update, context: Cont
             msg_template = lang_data.get("welcome_edit_fail", "❌ Failed to update template '{name}'.")
             await send_message_with_retry(context.bot, chat_id, msg_template.format(name=template_name), parse_mode=None)
 
+        # Clean up state for editing
         context.user_data.pop('state', None)
         context.user_data.pop('editing_welcome_template_name', None)
-        # Simulate callback to refresh the menu
-        await handle_adm_manage_welcome(update, context)
+
+    # <<< MODIFICATION START: Send the menu as a new message >>>
+    templates = get_welcome_message_templates()
+    conn_m = None; active_template_name = "default"
+    try:
+        conn_m = get_db_connection(); c_m = conn_m.cursor()
+        c_m.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
+        res_m = c_m.fetchone(); active_template_name = res_m['setting_value'] if res_m else "default"
+    except Exception as e: logger.error(f"Error fetching active welcome template name after edit/add: {e}")
+    finally:
+        if conn_m: conn_m.close()
+
+    title = lang_data.get("manage_welcome_title", "⚙️ Manage Welcome Messages")
+    prompt = lang_data.get("manage_welcome_prompt", "Select a template to manage or activate:")
+    menu_msg = f"{title}\n\n{prompt}\n"
+    menu_keyboard = []
+    if not templates: menu_msg += "\nNo templates found. Add one?"
+    else:
+        for template in templates:
+            name = template['name']
+            is_active = (name == active_template_name)
+            active_indicator = lang_data.get("welcome_template_active", " (Active ✅)") if is_active else lang_data.get("welcome_template_inactive", "")
+            row = [InlineKeyboardButton(f"{name}{active_indicator}", callback_data=f"adm_edit_welcome|{name}")]
+            if not is_active: row.append(InlineKeyboardButton(lang_data.get("welcome_button_activate", "✅ Activate"), callback_data=f"adm_activate_welcome|{name}"))
+            if len(templates) > 1 or name != "default": row.append(InlineKeyboardButton(lang_data.get("welcome_button_delete", "🗑️ Delete"), callback_data=f"adm_delete_welcome_confirm|{name}"))
+            menu_keyboard.append(row)
+    menu_keyboard.append([InlineKeyboardButton(lang_data.get("welcome_button_add_new", "➕ Add New Template"), callback_data="adm_add_welcome_start")])
+    menu_keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")])
+
+    # Use the original update's chat_id if available, otherwise use the one from the message
+    target_chat_id = update.callback_query.message.chat_id if update.callback_query else chat_id
+    await send_message_with_retry(context.bot, target_chat_id, menu_msg, reply_markup=InlineKeyboardMarkup(menu_keyboard), parse_mode=None)
+    # <<< MODIFICATION END >>>
+
+# --- Admin Message Handlers (Existing - Keep these) ---
+# ... (handle_adm_add_city_message) ...
+# ... (handle_adm_add_district_message) ...
+# ... (handle_adm_edit_district_message) ...
+# ... (handle_adm_edit_city_message) ...
+# ... (handle_adm_custom_size_message) ...
+# ... (handle_adm_price_message) ...
+# ... (handle_adm_bot_media_message) ...
+# ... (handle_adm_add_type_message) ...
+# ... (handle_adm_add_type_emoji_message) ...
+# ... (handle_adm_edit_type_emoji_message) ...
+# ... (handle_adm_discount_code_message) ...
+# ... (handle_adm_discount_value_message) ...
+# ... (handle_adm_broadcast_inactive_days_message) ...
+# ... (handle_adm_broadcast_message) ...
