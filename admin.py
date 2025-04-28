@@ -760,7 +760,7 @@ async def handle_confirm_add_drop(update: Update, context: ContextTypes.DEFAULT_
             """INSERT INTO products
                 (city, district, product_type, size, name, price, available, reserved, original_text, added_by, added_date)
                 VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)""",
-            (city, district, p_type, size, product_name, price, original_text, ADMIN_ID, datetime.now().isoformat())
+            (city, district, p_type, size, product_name, price, original_text, ADMIN_ID, datetime.now(timezone.utc).isoformat()) # Use UTC time
         )
         product_id = c.lastrowid
 
@@ -2790,7 +2790,7 @@ async def handle_adm_discount_value_message(update: Update, context: ContextType
         conn = get_db_connection() # Use helper
         c = conn.cursor()
         c.execute("INSERT INTO discount_codes (code, discount_type, value, created_date, is_active) VALUES (?, ?, ?, ?, 1)",
-                  (code, dtype, value, datetime.now().isoformat()))
+                  (code, dtype, value, datetime.now(timezone.utc).isoformat())) # Use UTC Time
         conn.commit()
         logger.info(f"Admin {user_id} added discount code: {code} ({dtype}, {value})")
         context.user_data.pop("state", None); context.user_data.pop("new_discount_info", None)
@@ -3018,5 +3018,11 @@ async def handle_adm_welcome_template_text_message(update: Update, context: Cont
     menu_keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")])
 
     await send_message_with_retry(context.bot, chat_id, menu_msg, reply_markup=InlineKeyboardMarkup(menu_keyboard), parse_mode=None)
+
+
+# --- Admin Message Handlers (Existing - Kept for completeness) ---
+# These handlers are mapped in main.py's STATE_HANDLERS dictionary
+
+# ... (Keep existing message handlers: handle_adm_add_city_message, handle_adm_add_district_message, handle_adm_edit_district_message, handle_adm_edit_city_message, handle_adm_custom_size_message, handle_adm_price_message, handle_adm_bot_media_message, handle_adm_add_type_message, handle_adm_add_type_emoji_message, handle_adm_edit_type_emoji_message, handle_adm_discount_code_message, handle_adm_discount_value_message, handle_adm_broadcast_inactive_days_message, handle_adm_broadcast_message) ...
 
 
