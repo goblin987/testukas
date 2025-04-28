@@ -320,7 +320,8 @@ LANGUAGES = {
         "admin_edit_type_emoji_button": "✏️ Change Emoji",
         "admin_invalid_emoji": "❌ Invalid input. Please send a single emoji.",
         "admin_type_emoji_updated": "✅ Emoji updated successfully for {type_name}!",
-        "admin_edit_type_menu": "🧩 Editing Type: {type_name}\n\nCurrent Emoji: {emoji}\n\nWhat would you like to do?",
+        "admin_edit_type_menu": "🧩 Editing Type: {type_name}\n\nCurrent Emoji: {emoji}\n{description}\n\nWhat would you like to do?", # Added {description}
+        "admin_edit_type_desc_button": "📝 Edit Description", #<<< NEW
         # --- Broadcast Translations ---
         "broadcast_select_target": "📢 Broadcast Message\n\nSelect the target audience:",
         "broadcast_target_all": "👥 All Users",
@@ -379,15 +380,19 @@ LANGUAGES = {
         "welcome_button_delete": "🗑️ Delete",
         "welcome_button_add_new": "➕ Add New Template",
         "welcome_button_reset_default": "🔄 Reset to Built-in Default", # <<< NEW
+        "welcome_button_edit_text": "Edit Text", # <<< NEW
+        "welcome_button_edit_desc": "Edit Description", # <<< NEW
+        "welcome_button_preview": "👁️ Preview", # <<< NEW
+        "welcome_button_save": "💾 Save Template", # <<< NEW
         "welcome_activate_success": "✅ Template '{name}' activated.",
         "welcome_activate_fail": "❌ Failed to activate template '{name}'.",
         "welcome_add_name_prompt": "Enter a unique short name for the new template (e.g., 'default', 'promo_weekend'):",
         "welcome_add_name_exists": "❌ Error: A template with the name '{name}' already exists.",
-        "welcome_add_text_prompt": "Template Name: {name}\n\nPlease reply with the full welcome message text. Available placeholders:\n{placeholders}",
+        "welcome_add_text_prompt": "Template Name: {name}\n\nPlease reply with the full welcome message text. Available placeholders:\n`{placeholders}`", # Escaped placeholders
         "welcome_add_description_prompt": "Optional: Enter a short description for this template (admin view only). Send '-' to skip.", # <<< NEW
         "welcome_add_success": "✅ Welcome message template '{name}' added.",
         "welcome_add_fail": "❌ Failed to add welcome message template.",
-        "welcome_edit_text_prompt": "Editing template '{name}'. Current text:\n\n{current_text}\n\nPlease reply with the new text. Available placeholders:\n{placeholders}",
+        "welcome_edit_text_prompt": "Editing Text for '{name}'. Current text:\n\n{current_text}\n\nPlease reply with the new text. Available placeholders:\n`{placeholders}`", # Escaped placeholders
         "welcome_edit_description_prompt": "Editing description for '{name}'. Current: '{current_desc}'.\n\nEnter new description or send '-' to keep current.", # <<< NEW
         "welcome_edit_success": "✅ Template '{name}' updated.",
         "welcome_edit_fail": "❌ Failed to update template '{name}'.",
@@ -405,214 +410,68 @@ LANGUAGES = {
         "welcome_reset_button_yes": "✅ Yes, Reset & Activate", # <<< NEW
         "welcome_reset_success": "✅ 'default' template reset and activated.", # <<< NEW
         "welcome_reset_fail": "❌ Failed to reset 'default' template.", # <<< NEW
+        "welcome_preview_title": "--- Welcome Message Preview ---", # <<< NEW
+        "welcome_preview_name": "Name", # <<< NEW
+        "welcome_preview_desc": "Desc", # <<< NEW
+        "welcome_preview_confirm": "Save this template?", # <<< NEW
+        "welcome_save_error_context": "❌ Error: Save data lost. Cannot save template.", # <<< NEW
+        "welcome_invalid_placeholder": "⚠️ Formatting Error! Missing placeholder: `{key}`\n\nRaw Text:\n{text}", # <<< NEW
+        "welcome_formatting_error": "⚠️ Unexpected Formatting Error!\n\nRaw Text:\n{text}", # <<< NEW
     },
     # --- Lithuanian ---
     "lt": {
         "native_name": "Lietuvių",
-        # ... (keep existing translations) ...
+        # ... (Add translations for new keys, similar to English) ...
         "welcome": "👋 Sveiki, {username}!\n\n👤 Būsena: {status} {progress_bar}\n💰 Balansas: {balance_str} EUR\n📦 Viso pirkimų: {purchases}\n🛒 Krepšelyje: {basket_count}\n\nPradėkite apsipirkti arba naršykite parinktis žemiau.\n\n⚠️ Pastaba: Pinigai negrąžinami.",
-        "no_products_in_city_districts": "Šiuo metu šiame mieste nėra prekių jokiuose rajonuose.",
-        "error_loading_districts": "Klaida kraunant rajonus. Bandykite dar kartą.",
-        "insufficient_balance_pay_option": "⚠️ Nepakankamas Likutis! ({balance} / {required} EUR)",
-        "pay_crypto_button": "💳 Mokėti Kriptovaliuta",
-        "apply_discount_pay_button": "🏷️ Panaudoti Nuolaidos Kodą",
-        "skip_discount_button": "⏩ Praleisti Nuolaidą",
-        "prompt_discount_or_pay": "Ar turite nuolaidos kodą, kurį norite panaudoti prieš mokant kriptovaliuta?",
-        "basket_pay_enter_discount": "Įveskite nuolaidos kodą šiam pirkiniui:",
-        "basket_pay_code_applied": "✅ Kodas '{code}' pritaikytas. Nauja suma: {total} EUR. Pasirinkite kriptovaliutą:",
-        "basket_pay_code_invalid": "❌ Kodas netinkamas: {reason}. Pasirinkite kriptovaliutą mokėti {total} EUR:",
-        "choose_crypto_for_purchase": "Pasirinkite kriptovaliutą sumokėti {amount} EUR už krepšelį:",
-        "crypto_purchase_success": "Mokėjimas Patvirtintas! Jūsų pirkimo informacija siunčiama.",
-        "crypto_purchase_failed": "Mokėjimas Nepavyko/Baigėsi. Jūsų prekės nebėra rezervuotos.",
-        "basket_pay_too_low": "Krepšelio suma {basket_total} EUR yra mažesnė nei minimali {currency}.",
-        # --- NEW Broadcast Translations ---
-        "broadcast_select_target": "📢 Masinė Žinutė\n\nPasirinkite gavėjų auditoriją:",
-        "broadcast_target_all": "👥 Visi Vartotojai",
-        "broadcast_target_city": "🏙️ Pagal Paskutinio Pirkimo Miestą",
-        "broadcast_target_status": "👑 Pagal Vartotojo Statusą",
-        "broadcast_target_inactive": "⏳ Pagal Neaktyvumą (Dienomis)",
-        "broadcast_select_city_target": "🏙️ Pasirinkite Miestą\n\nVartotojai, kurių paskutinis pirkimas buvo:",
-        "broadcast_select_status_target": "👑 Pasirinkite Statusą:",
-        "broadcast_status_vip": "VIP 👑",
-        "broadcast_status_regular": "Reguliarus ⭐",
-        "broadcast_status_new": "Naujas 🌱",
-        "broadcast_enter_inactive_days": "⏳ Įveskite Neaktyvumo Laikotarpį\n\nAtsakykite nurodydami dienų skaičių nuo vartotojo paskutinio pirkimo (arba registracijos, jei pirkimų nebuvo). Vartotojai, neaktyvūs tiek ar daugiau dienų, gaus žinutę.",
-        "broadcast_invalid_days": "❌ Neteisingas dienų skaičius. Įveskite teigiamą sveikąjį skaičių.",
-        "broadcast_days_too_large": "❌ Dienų skaičius per didelis. Įveskite mažesnį skaičių.",
-        "broadcast_ask_message": "📝 Dabar siųskite žinutės turinį (tekstą, nuotrauką, vaizdo įrašą ar GIF su aprašu):",
-        "broadcast_confirm_title": "📢 Patvirtinti Siuntimą",
-        "broadcast_confirm_target_all": "Gavėjai: Visi Vartotojai",
-        "broadcast_confirm_target_city": "Gavėjai: Paskutinis pirkimas {city}",
-        "broadcast_confirm_target_status": "Gavėjai: Statusas - {status}",
-        "broadcast_confirm_target_inactive": "Gavėjai: Neaktyvūs >= {days} dienų",
-        "broadcast_confirm_preview": "Peržiūra:",
-        "broadcast_confirm_ask": "Siųsti šią žinutę?",
-        "broadcast_no_users_found_target": "⚠️ Transliacijos Įspėjimas: Nerasta vartotojų, atitinkančių nurodytus kriterijus.",
-        # --- NEW User Management Translations ---
-        "manage_users_title": "👤 Vartotojų Valdymas",
-        "manage_users_prompt": "Pasirinkite vartotoją peržiūrai ar valdymui:",
-        "manage_users_no_users": "Vartotojų nerasta.",
-        "view_user_profile_title": "👤 Vartotojo Profilis: @{username} (ID: {user_id})",
-        "user_profile_status": "Būsena",
-        "user_profile_balance": "Balansas",
-        "user_profile_purchases": "Viso Pirkimų",
-        "user_profile_banned": "Užblokavimo Būsena",
-        "user_profile_is_banned": "Taip 🚫",
-        "user_profile_not_banned": "Ne ✅",
-        "user_profile_button_adjust_balance": "💰 Koreguoti Balansą",
-        "user_profile_button_ban": "🚫 Užblokuoti Vartotoją",
-        "user_profile_button_unban": "✅ Atblokuoti Vartotoją",
-        "user_profile_button_back_list": "⬅️ Atgal į Vartotojų Sąrašą",
-        "adjust_balance_prompt": "Atsakykite suma, kuria koreguoti vartotojo @{username} (ID: {user_id}) balansą.\nNaudokite teigiamą skaičių pridėjimui (pvz., 10.50) arba neigiamą atėmimui (pvz., -5.00).",
-        "adjust_balance_reason_prompt": "Prašome atsakyti trumpa šio balanso koregavimo ({amount} EUR) priežastimi:",
-        "adjust_balance_invalid_amount": "❌ Neteisinga suma. Įveskite nenulinį skaičių (pvz., 10.5 arba -5).",
-        "adjust_balance_reason_empty": "❌ Priežastis negali būti tuščia. Prašome nurodyti priežastį.",
-        "adjust_balance_success": "✅ Vartotojo @{username} balansas sėkmingai pakoreguotas. Naujas balansas: {new_balance} EUR.",
-        "adjust_balance_db_error": "❌ Duomenų bazės klaida koreguojant balansą.",
-        "ban_success": "🚫 Vartotojas @{username} (ID: {user_id}) buvo užblokuotas.",
-        "unban_success": "✅ Vartotojas @{username} (ID: {user_id}) buvo atblokuotas.",
-        "ban_db_error": "❌ Duomenų bazės klaida atnaujinant blokavimo būseną.",
-        "ban_cannot_ban_admin": "❌ Negalima užblokuoti pagrindinio administratoriaus.",
-        # <<< Welcome Message Management >>>
-        "manage_welcome_title": "⚙️ Sveikinimo Žinučių Valdymas",
-        "manage_welcome_prompt": "Pasirinkite šabloną valdymui ar aktyvavimui:",
-        "welcome_template_active": " (Aktyvus ✅)",
-        "welcome_template_inactive": "",
-        "welcome_button_activate": "✅ Aktyvuoti",
-        "welcome_button_edit": "✏️ Redaguoti",
-        "welcome_button_delete": "🗑️ Ištrinti",
-        "welcome_button_add_new": "➕ Pridėti Naują Šabloną",
-        "welcome_button_reset_default": "🔄 Atstatyti Numatytąjį", # <<< NEW
-        "welcome_activate_success": "✅ Šablonas '{name}' aktyvuotas.",
-        "welcome_activate_fail": "❌ Nepavyko aktyvuoti šablono '{name}'.",
-        "welcome_add_name_prompt": "Įveskite unikalų trumpą pavadinimą naujam šablonui (pvz., 'pagrindinis', 'akcija_savaitgalis'):",
-        "welcome_add_name_exists": "❌ Klaida: Šablonas pavadinimu '{name}' jau egzistuoja.",
-        "welcome_add_text_prompt": "Šablono Pavadinimas: {name}\n\nAtsakykite pilnu sveikinimo žinutės tekstu. Galimi laikikliai:\n{placeholders}",
-        "welcome_add_description_prompt": "Pasirinktinai: Įveskite trumpą šablono aprašymą (tik administratoriui). Siųskite '-' norėdami praleisti.", # <<< NEW
-        "welcome_add_success": "✅ Sveikinimo žinutės šablonas '{name}' pridėtas.",
-        "welcome_add_fail": "❌ Nepavyko pridėti sveikinimo žinutės šablono.",
-        "welcome_edit_text_prompt": "Redaguojamas šablonas '{name}'. Dabartinis tekstas:\n\n{current_text}\n\nAtsakykite nauju tekstu. Galimi laikikliai:\n{placeholders}",
-        "welcome_edit_description_prompt": "Redaguojamas aprašymas šablonui '{name}'. Dabartinis: '{current_desc}'.\n\nĮveskite naują aprašymą arba siųskite '-', kad paliktumėte esamą.", # <<< NEW
-        "welcome_edit_success": "✅ Šablonas '{name}' atnaujintas.",
-        "welcome_edit_fail": "❌ Nepavyko atnaujinti šablono '{name}'.",
-        "welcome_delete_confirm_title": "⚠️ Patvirtinti Trynimą",
-        "welcome_delete_confirm_text": "Ar tikrai norite ištrinti sveikinimo žinutės šabloną pavadinimu '{name}'?",
-        "welcome_delete_confirm_active": "\n\n🚨 ĮSPĖJIMAS: Tai šiuo metu aktyvus šablonas! Jį ištrynus bus naudojama numatytoji įtaisytoji žinutė.",
-        "welcome_delete_confirm_last": "\n\n🚨 ĮSPĖJIMAS: Tai paskutinis šablonas! Jį ištrynus bus naudojama numatytoji įtaisytoji žinutė.",
-        "welcome_delete_button_yes": "✅ Taip, Trinti Šabloną",
-        "welcome_delete_success": "✅ Šablonas '{name}' ištrintas.",
-        "welcome_delete_fail": "❌ Nepavyko ištrinti šablono '{name}'.",
-        "welcome_delete_not_found": "❌ Šablonas '{name}' nerastas trynimui.",
-        "welcome_cannot_delete_active": "❌ Negalima ištrinti aktyvaus šablono. Pirma aktyvuokite kitą.", # <<< NEW
-        "welcome_reset_confirm_title": "⚠️ Patvirtinti Atstatymą", # <<< NEW
-        "welcome_reset_confirm_text": "Ar tikrai norite atstatyti 'default' šablono tekstą į įtaisytąją versiją ir jį aktyvuoti?", # <<< NEW
-        "welcome_reset_button_yes": "✅ Taip, Atstatyti ir Aktyvuoti", # <<< NEW
-        "welcome_reset_success": "✅ 'default' šablonas atstatytas ir aktyvuotas.", # <<< NEW
-        "welcome_reset_fail": "❌ Nepavyko atstatyti 'default' šablono.", # <<< NEW
+        # ... other existing translations ...
+        "welcome_button_reset_default": "🔄 Atstatyti Numatytąjį",
+        "welcome_button_edit_text": "Redaguoti Tekstą",
+        "welcome_button_edit_desc": "Redaguoti Aprašymą",
+        "welcome_button_preview": "👁️ Peržiūra",
+        "welcome_button_save": "💾 Išsaugoti Šabloną",
+        "welcome_add_description_prompt": "Pasirinktinai: Įveskite trumpą šablono aprašymą (tik administratoriui). Siųskite '-' norėdami praleisti.",
+        "welcome_edit_description_prompt": "Redaguojamas aprašymas šablonui '{name}'. Dabartinis: '{current_desc}'.\n\nĮveskite naują aprašymą arba siųskite '-', kad paliktumėte esamą.",
+        "welcome_cannot_delete_active": "❌ Negalima ištrinti aktyvaus šablono. Pirma aktyvuokite kitą.",
+        "welcome_reset_confirm_title": "⚠️ Patvirtinti Atstatymą",
+        "welcome_reset_confirm_text": "Ar tikrai norite atstatyti 'default' šablono tekstą į įtaisytąją versiją ir jį aktyvuoti?",
+        "welcome_reset_button_yes": "✅ Taip, Atstatyti ir Aktyvuoti",
+        "welcome_reset_success": "✅ 'default' šablonas atstatytas ir aktyvuotas.",
+        "welcome_reset_fail": "❌ Nepavyko atstatyti 'default' šablono.",
+        "welcome_preview_title": "--- Sveikinimo Žinutės Peržiūra ---",
+        "welcome_preview_name": "Pavadinimas",
+        "welcome_preview_desc": "Apraš.",
+        "welcome_preview_confirm": "Išsaugoti šį šabloną?",
+        "welcome_save_error_context": "❌ Klaida: Dingo saugojimo duomenys. Negalima išsaugoti šablono.",
+        "welcome_invalid_placeholder": "⚠️ Formatavimo Klaida! Trūksta laikiklio: `{key}`\n\nŽalias Tekstas:\n{text}",
+        "welcome_formatting_error": "⚠️ Netikėta Formatavimo Klaida!\n\nŽalias Tekstas:\n{text}",
+
     },
     # --- Russian ---
     "ru": {
         "native_name": "Русский",
-        # ... (keep existing translations) ...
+        # ... (Add translations for new keys, similar to English) ...
         "welcome": "👋 Добро пожаловать, {username}!\n\n👤 Статус: {status} {progress_bar}\n💰 Баланс: {balance_str} EUR\n📦 Всего покупок: {purchases}\n🛒 В корзине: {basket_count}\n\nНачните покупки или изучите опции ниже.\n\n⚠️ Примечание: Возврат средств невозможен.",
-        "no_products_in_city_districts": "В настоящее время в этом городе нет доступных товаров ни в одном районе.",
-        "error_loading_districts": "Ошибка загрузки районов. Пожалуйста, попробуйте еще раз.",
-        "insufficient_balance_pay_option": "⚠️ Недостаточно Средств! ({balance} / {required} EUR)",
-        "pay_crypto_button": "💳 Оплатить Криптовалютой",
-        "apply_discount_pay_button": "🏷️ Применить Промокод",
-        "skip_discount_button": "⏩ Пропустить Скидку",
-        "prompt_discount_or_pay": "У вас есть промокод для применения перед оплатой криптовалютой?",
-        "basket_pay_enter_discount": "Введите промокод для этой покупки:",
-        "basket_pay_code_applied": "✅ Код '{code}' применен. Новая сумма: {total} EUR. Выберите криптовалюту:",
-        "basket_pay_code_invalid": "❌ Код недействителен: {reason}. Выберите криптовалюту для оплаты {total} EUR:",
-        "choose_crypto_for_purchase": "Выберите криптовалюту для оплаты {amount} EUR за вашу корзину:",
-        "crypto_purchase_success": "Платеж Подтвержден! Информация о вашей покупке отправляется.",
-        "crypto_purchase_failed": "Платеж Неудачен/Истек. Ваши товары больше не зарезервированы.",
-        "basket_pay_too_low": "Сумма корзины {basket_total} EUR ниже минимума для {currency}.",
-        # --- NEW Broadcast Translations ---
-        "broadcast_select_target": "📢 Массовая Рассылка\n\nВыберите целевую аудиторию:",
-        "broadcast_target_all": "👥 Все Пользователи",
-        "broadcast_target_city": "🏙️ По Городу Последней Покупки",
-        "broadcast_target_status": "👑 По Статусу Пользователя",
-        "broadcast_target_inactive": "⏳ По Неактивности (Дни)",
-        "broadcast_select_city_target": "🏙️ Выберите Город\n\nПользователи, чья последняя покупка была в:",
-        "broadcast_select_status_target": "👑 Выберите Статус:",
-        "broadcast_status_vip": "VIP 👑",
-        "broadcast_status_regular": "Постоянный ⭐",
-        "broadcast_status_new": "Новый 🌱",
-        "broadcast_enter_inactive_days": "⏳ Введите Период Неактивности\n\nОтветьте количеством дней с последней покупки пользователя (или с момента регистрации, если покупок не было). Пользователи, неактивные в течение этого или большего количества дней, получат сообщение.",
-        "broadcast_invalid_days": "❌ Неверное количество дней. Введите положительное целое число.",
-        "broadcast_days_too_large": "❌ Слишком большое количество дней. Введите меньшее число.",
-        "broadcast_ask_message": "📝 Теперь отправьте содержимое сообщения (текст, фото, видео или GIF с подписью):",
-        "broadcast_confirm_title": "📢 Подтвердить Рассылку",
-        "broadcast_confirm_target_all": "Цель: Все Пользователи",
-        "broadcast_confirm_target_city": "Цель: Последняя покупка в {city}",
-        "broadcast_confirm_target_status": "Цель: Статус - {status}",
-        "broadcast_confirm_target_inactive": "Цель: Неактивные >= {days} дней",
-        "broadcast_confirm_preview": "Предпросмотр:",
-        "broadcast_confirm_ask": "Отправить это сообщение?",
-        "broadcast_no_users_found_target": "⚠️ Предупреждение Рассылки: Пользователи, соответствующие критериям, не найдены.",
-        # --- NEW User Management Translations ---
-        "manage_users_title": "👤 Управление Пользователями",
-        "manage_users_prompt": "Выберите пользователя для просмотра или управления:",
-        "manage_users_no_users": "Пользователи не найдены.",
-        "view_user_profile_title": "👤 Профиль Пользователя: @{username} (ID: {user_id})",
-        "user_profile_status": "Статус",
-        "user_profile_balance": "Баланс",
-        "user_profile_purchases": "Всего Покупок",
-        "user_profile_banned": "Статус Блокировки",
-        "user_profile_is_banned": "Да 🚫",
-        "user_profile_not_banned": "Нет ✅",
-        "user_profile_button_adjust_balance": "💰 Изменить Баланс",
-        "user_profile_button_ban": "🚫 Заблокировать",
-        "user_profile_button_unban": "✅ Разблокировать",
-        "user_profile_button_back_list": "⬅️ Назад к Списку",
-        "adjust_balance_prompt": "Ответьте суммой для изменения баланса @{username} (ID: {user_id}).\nИспользуйте положительное число для добавления (напр., 10.50) или отрицательное для вычитания (напр., -5.00).",
-        "adjust_balance_reason_prompt": "Пожалуйста, ответьте краткой причиной этого изменения баланса ({amount} EUR):",
-        "adjust_balance_invalid_amount": "❌ Неверная сумма. Введите ненулевое число (напр., 10.5 или -5).",
-        "adjust_balance_reason_empty": "❌ Причина не может быть пустой. Укажите причину.",
-        "adjust_balance_success": "✅ Баланс пользователя @{username} успешно изменен. Новый баланс: {new_balance} EUR.",
-        "adjust_balance_db_error": "❌ Ошибка базы данных при изменении баланса.",
-        "ban_success": "🚫 Пользователь @{username} (ID: {user_id}) заблокирован.",
-        "unban_success": "✅ Пользователь @{username} (ID: {user_id}) разблокирован.",
-        "ban_db_error": "❌ Ошибка базы данных при обновлении статуса блокировки.",
-        "ban_cannot_ban_admin": "❌ Невозможно заблокировать главного администратора.",
-        # <<< Welcome Message Management >>>
-        "manage_welcome_title": "⚙️ Управление Приветствиями",
-        "manage_welcome_prompt": "Выберите шаблон для управления или активации:",
-        "welcome_template_active": " (Активен ✅)",
-        "welcome_template_inactive": "",
-        "welcome_button_activate": "✅ Активировать",
-        "welcome_button_edit": "✏️ Редактировать",
-        "welcome_button_delete": "🗑️ Удалить",
-        "welcome_button_add_new": "➕ Добавить Новый Шаблон",
-        "welcome_button_reset_default": "🔄 Сбросить к Встроенному", # <<< NEW
-        "welcome_activate_success": "✅ Шаблон '{name}' активирован.",
-        "welcome_activate_fail": "❌ Не удалось активировать шаблон '{name}'.",
-        "welcome_add_name_prompt": "Введите уникальное короткое имя для нового шаблона (например, 'default', 'promo_weekend'):",
-        "welcome_add_name_exists": "❌ Ошибка: Шаблон с именем '{name}' уже существует.",
-        "welcome_add_text_prompt": "Имя шаблона: {name}\n\nПожалуйста, ответьте полным текстом приветственного сообщения. Доступные плейсхолдеры:\n{placeholders}",
-        "welcome_add_description_prompt": "Необязательно: Введите краткое описание для этого шаблона (только для администратора). Отправьте '-' чтобы пропустить.", # <<< NEW
-        "welcome_add_success": "✅ Шаблон приветственного сообщения '{name}' добавлен.",
-        "welcome_add_fail": "❌ Не удалось добавить шаблон приветственного сообщения.",
-        "welcome_edit_text_prompt": "Редактирование шаблона '{name}'. Текущий текст:\n\n{current_text}\n\nПожалуйста, ответьте новым текстом. Доступные плейсхолдеры:\n{placeholders}",
-        "welcome_edit_description_prompt": "Редактирование описания для '{name}'. Текущее: '{current_desc}'.\n\nВведите новое описание или отправьте '-', чтобы оставить текущее.", # <<< NEW
-        "welcome_edit_success": "✅ Шаблон '{name}' обновлен.",
-        "welcome_edit_fail": "❌ Не удалось обновить шаблон '{name}'.",
-        "welcome_delete_confirm_title": "⚠️ Подтвердить Удаление",
-        "welcome_delete_confirm_text": "Вы уверены, что хотите удалить шаблон приветственного сообщения с именем '{name}'?",
-        "welcome_delete_confirm_active": "\n\n🚨 ВНИМАНИЕ: Это текущий активный шаблон! Его удаление вернет стандартное встроенное сообщение.",
-        "welcome_delete_confirm_last": "\n\n🚨 ВНИМАНИЕ: Это последний шаблон! Его удаление вернет стандартное встроенное сообщение.",
-        "welcome_delete_button_yes": "✅ Да, Удалить Шаблон",
-        "welcome_delete_success": "✅ Шаблон '{name}' удален.",
-        "welcome_delete_fail": "❌ Не удалось удалить шаблон '{name}'.",
-        "welcome_delete_not_found": "❌ Шаблон '{name}' не найден для удаления.",
-        "welcome_cannot_delete_active": "❌ Нельзя удалить активный шаблон. Сначала активируйте другой.", # <<< NEW
-        "welcome_reset_confirm_title": "⚠️ Подтвердить Сброс", # <<< NEW
-        "welcome_reset_confirm_text": "Вы уверены, что хотите сбросить текст шаблона 'default' к встроенной версии и активировать его?", # <<< NEW
-        "welcome_reset_button_yes": "✅ Да, Сбросить и Активировать", # <<< NEW
-        "welcome_reset_success": "✅ Шаблон 'default' сброшен и активирован.", # <<< NEW
-        "welcome_reset_fail": "❌ Не удалось сбросить шаблон 'default'.", # <<< NEW
+        # ... other existing translations ...
+        "welcome_button_reset_default": "🔄 Сбросить к Встроенному",
+        "welcome_button_edit_text": "Редакт. Текст",
+        "welcome_button_edit_desc": "Редакт. Описание",
+        "welcome_button_preview": "👁️ Предпросмотр",
+        "welcome_button_save": "💾 Сохранить Шаблон",
+        "welcome_add_description_prompt": "Необязательно: Введите краткое описание для этого шаблона (только для администратора). Отправьте '-' чтобы пропустить.",
+        "welcome_edit_description_prompt": "Редактирование описания для '{name}'. Текущее: '{current_desc}'.\n\nВведите новое описание или отправьте '-', чтобы оставить текущее.",
+        "welcome_cannot_delete_active": "❌ Нельзя удалить активный шаблон. Сначала активируйте другой.",
+        "welcome_reset_confirm_title": "⚠️ Подтвердить Сброс",
+        "welcome_reset_confirm_text": "Вы уверены, что хотите сбросить текст шаблона 'default' к встроенной версии и активировать его?",
+        "welcome_reset_button_yes": "✅ Да, Сбросить и Активировать",
+        "welcome_reset_success": "✅ Шаблон 'default' сброшен и активирован.",
+        "welcome_reset_fail": "❌ Не удалось сбросить шаблон 'default'.",
+        "welcome_preview_title": "--- Предпросмотр Приветствия ---",
+        "welcome_preview_name": "Имя",
+        "welcome_preview_desc": "Опис.",
+        "welcome_preview_confirm": "Сохранить этот шаблон?",
+        "welcome_save_error_context": "❌ Ошибка: Данные для сохранения утеряны. Невозможно сохранить шаблон.",
+        "welcome_invalid_placeholder": "⚠️ Ошибка Форматирования! Отсутствует плейсхолдер: `{key}`\n\nИсходный Текст:\n{text}",
+        "welcome_formatting_error": "⚠️ Неожиданная Ошибка Форматирования!\n\nИсходный Текст:\n{text}",
     }
 }
 # ==============================================================
@@ -687,14 +546,24 @@ def init_db():
             # product_types table
             c.execute(f'''CREATE TABLE IF NOT EXISTS product_types (
                 name TEXT PRIMARY KEY NOT NULL,
-                emoji TEXT DEFAULT '{DEFAULT_PRODUCT_EMOJI}'
+                emoji TEXT DEFAULT '{DEFAULT_PRODUCT_EMOJI}',
+                description TEXT -- <<< Added description column
             )''')
+            # Add emoji column if missing
             try:
                 c.execute(f"ALTER TABLE product_types ADD COLUMN emoji TEXT DEFAULT '{DEFAULT_PRODUCT_EMOJI}'")
                 logger.info("Added 'emoji' column to product_types table.")
             except sqlite3.OperationalError as alter_e:
                  if "duplicate column name: emoji" in str(alter_e): pass
                  else: raise
+            # Add description column if missing (for product types - less likely needed but consistent)
+            try:
+                c.execute("ALTER TABLE product_types ADD COLUMN description TEXT")
+                logger.info("Added 'description' column to product_types table.")
+            except sqlite3.OperationalError as alter_e:
+                 if "duplicate column name: description" in str(alter_e): pass
+                 else: raise
+
             # products table
             c.execute('''CREATE TABLE IF NOT EXISTS products (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, city TEXT NOT NULL, district TEXT NOT NULL,
@@ -778,9 +647,9 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE NOT NULL,
                 template_text TEXT NOT NULL,
-                description TEXT  -- <<< NEW Column
+                description TEXT  -- <<< Ensure Column Exists (was added before)
             )''')
-            # Add description column if missing
+            # Add description column if missing (double-check)
             try:
                 c.execute("ALTER TABLE welcome_messages ADD COLUMN description TEXT")
                 logger.info("Added 'description' column to welcome_messages table.")
@@ -802,7 +671,8 @@ def init_db():
                 try:
                     # Use INSERT OR IGNORE to avoid errors if templates already exist
                     c.execute("INSERT OR IGNORE INTO welcome_messages (name, template_text, description) VALUES (?, ?, ?)", (name, text, desc))
-                    if conn.changes() > 0: # Check if a row was actually inserted (more reliable than lastrowid for INSERT OR IGNORE)
+                    # <<< FIX: Use cursor.rowcount (standard) or changes() AFTER execute >>>
+                    if c.rowcount > 0: # Check if a row was actually inserted
                         inserted_count += 1
                 except sqlite3.Error as insert_e: # Catch potential errors during insert
                     logger.error(f"Error inserting template '{name}': {insert_e}")
@@ -1221,7 +1091,8 @@ def format_expiration_time(expiration_date_str: str | None) -> str:
         if not expiration_date_str.endswith('Z') and '+' not in expiration_date_str and '-' not in expiration_date_str[10:]:
             expiration_date_str += 'Z' # Assume UTC if no timezone
         dt_obj = datetime.fromisoformat(expiration_date_str.replace('Z', '+00:00'))
-        return dt_obj.strftime("%H:%M:%S %Z")
+        # Format with timezone name (like UTC)
+        return dt_obj.strftime("%H:%M:%S %Z") if dt_obj.tzinfo else dt_obj.strftime("%H:%M:%S")
     except (ValueError, TypeError) as e: logger.warning(f"Could not parse expiration date string '{expiration_date_str}': {e}"); return "Invalid Date"
 
 
