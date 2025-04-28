@@ -1997,7 +1997,7 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
             name_to_delete = action_params[0]
             # Check if active
             c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
-            active_name = c.fetchone(); active_name = active_name['setting_value'] if active_name else None # Use column name
+            active_name_row = c.fetchone(); active_name = active_name_row['setting_value'] if active_name_row else None # Use column name and handle None
             if active_name == name_to_delete:
                  # If deleting active, revert setting to 'default'
                  c.execute("INSERT OR REPLACE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)", ("active_welcome_message_name", "default"))
@@ -2768,6 +2768,8 @@ async def handle_adm_welcome_template_text_message(update: Update, context: Cont
         context.user_data.pop('editing_welcome_template_name', None)
 
     # <<< MODIFICATION START: Send the menu as a new message >>>
+    # We need a context or update object that has a callback_query to call handle_adm_manage_welcome
+    # Since this is a message handler, we don't have one. We'll build and send manually.
     templates = get_welcome_message_templates()
     conn_m = None; active_template_name = "default"
     try:
@@ -2796,22 +2798,14 @@ async def handle_adm_welcome_template_text_message(update: Update, context: Cont
     menu_keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")])
 
     # Use the original update's chat_id if available, otherwise use the one from the message
-    target_chat_id = update.callback_query.message.chat_id if update.callback_query else chat_id
-    await send_message_with_retry(context.bot, target_chat_id, menu_msg, reply_markup=InlineKeyboardMarkup(menu_keyboard), parse_mode=None)
+    # Correction: Cannot reliably get query from message update context. Use chat_id from message.
+    await send_message_with_retry(context.bot, chat_id, menu_msg, reply_markup=InlineKeyboardMarkup(menu_keyboard), parse_mode=None)
     # <<< MODIFICATION END >>>
 
-# --- Admin Message Handlers (Existing - Keep these) ---
-# ... (handle_adm_add_city_message) ...
-# ... (handle_adm_add_district_message) ...
-# ... (handle_adm_edit_district_message) ...
-# ... (handle_adm_edit_city_message) ...
-# ... (handle_adm_custom_size_message) ...
-# ... (handle_adm_price_message) ...
-# ... (handle_adm_bot_media_message) ...
-# ... (handle_adm_add_type_message) ...
-# ... (handle_adm_add_type_emoji_message) ...
-# ... (handle_adm_edit_type_emoji_message) ...
-# ... (handle_adm_discount_code_message) ...
-# ... (handle_adm_discount_value_message) ...
-# ... (handle_adm_broadcast_inactive_days_message) ...
-# ... (handle_adm_broadcast_message) ...
+# --- Admin Message Handlers (Existing - Kept for completeness) ---
+# These handlers are mapped in main.py's STATE_HANDLERS dictionary
+
+# ... (Keep existing message handlers: handle_adm_add_city_message, handle_adm_add_district_message, handle_adm_edit_district_message, handle_adm_edit_city_message, handle_adm_custom_size_message, handle_adm_price_message, handle_adm_bot_media_message, handle_adm_add_type_message, handle_adm_add_type_emoji_message, handle_adm_edit_type_emoji_message, handle_adm_discount_code_message, handle_adm_discount_value_message, handle_adm_broadcast_inactive_days_message, handle_adm_broadcast_message) ...
+
+
+# --- END OF FILE admin.py ---
