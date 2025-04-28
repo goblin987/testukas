@@ -22,7 +22,10 @@ from utils import (
     clear_expired_basket, fetch_last_purchases, get_user_status, fetch_reviews,
     NOWPAYMENTS_API_KEY, # Check if NOWPayments is configured
     get_db_connection, MEDIA_DIR, # Import helper and MEDIA_DIR
-    DEFAULT_PRODUCT_EMOJI # Import default emoji
+    DEFAULT_PRODUCT_EMOJI, # Import default emoji
+    load_active_welcome_message, # <<< Import welcome message loader
+    DEFAULT_WELCOME_MESSAGE # <<< Import default welcome message
+    # Removed LANGUAGES import here as it's loaded within _get_lang_data if needed
 )
 import json # <<< Make sure json is imported
 import payment # <<< Make sure payment module is imported
@@ -54,14 +57,20 @@ EMOJI_DISCOUNT = "🏷️"
 def _get_lang_data(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, dict]:
     """Gets the current language code and corresponding language data dictionary."""
     lang = context.user_data.get("lang", "en")
-    # <<< ADDED LOGGING >>>
+    # Need LANGUAGES dictionary here, import it from utils if not already available globally
+    # This avoids circular import if utils needed user.py
+    try:
+        from utils import LANGUAGES as UTILS_LANGUAGES
+    except ImportError: # Fallback in case of issues
+        UTILS_LANGUAGES = {'en': {'welcome': 'Welcome!'}} # Minimal fallback
+        logger.error("Could not import LANGUAGES from utils in _get_lang_data")
+
     logger.debug(f"_get_lang_data: Retrieved lang '{lang}' from context.user_data.")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-    if lang not in LANGUAGES:
+    lang_data = UTILS_LANGUAGES.get(lang, UTILS_LANGUAGES['en'])
+    if lang not in UTILS_LANGUAGES:
         logger.warning(f"_get_lang_data: Language '{lang}' not found in LANGUAGES dict. Falling back to 'en'.")
         lang = 'en' # Ensure lang variable reflects the fallback
-    # <<< ADDED LOGGING >>>
-    # Log first few keys for debugging, limit length if too many keys
+
     keys_sample = list(lang_data.keys())[:5]
     logger.debug(f"_get_lang_data: Returning lang '{lang}' and lang_data keys sample: {keys_sample}...")
     return lang, lang_data
@@ -69,22 +78,29 @@ def _get_lang_data(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, dict]:
 # --- Helper Function to Build Start Menu ---
 def _build_start_menu_content(user_id: int, username: str, lang_data: dict, context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup]:
     """Builds the text and keyboard for the start menu using provided lang_data."""
-    # <<< ADDED LOGGING >>>
-    logger.debug(f"_build_start_menu_content: Building menu for user {user_id} with lang_data starting with welcome: '{lang_data.get('welcome', 'N/A')}'")
+    logger.debug(f"_build_start_menu_content: Building menu for user {user_id} with lang_data.")
 
     balance, purchases, basket_count = Decimal('0.0'), 0, 0
     conn = None
+    active_template_name_from_db = None # <<< NEW: Variable to store DB setting
+
     try:
         conn = get_db_connection()
         c = conn.cursor()
+        # Get user stats
         c.execute("SELECT balance, total_purchases FROM users WHERE user_id = ?", (user_id,))
         result = c.fetchone()
         if result:
             balance = Decimal(str(result['balance']))
             purchases = result['total_purchases']
 
-        # Ensure basket count is up-to-date (handles expiration implicitly if needed)
-        # Note: clear_expired_basket itself is synchronous and modifies context
+        # <<< NEW: Get active welcome template name setting >>>
+        c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
+        setting_row = c.fetchone()
+        if setting_row:
+            active_template_name_from_db = setting_row['setting_value']
+        # <<< END NEW >>>
+
         clear_expired_basket(context, user_id)
         basket = context.user_data.get("basket", [])
         basket_count = len(basket)
@@ -92,31 +108,59 @@ def _build_start_menu_content(user_id: int, username: str, lang_data: dict, cont
 
     except sqlite3.Error as e:
         logger.error(f"Database error fetching data for start menu build (user {user_id}): {e}", exc_info=True)
+        active_template_name_from_db = None # Fallback on DB error
     finally:
         if conn: conn.close()
 
-    # Build Message Text using the PASSED lang_data
+    # --- Determine which template text to use ---
+    welcome_template_to_use = lang_data.get('welcome', DEFAULT_WELCOME_MESSAGE) # Start with the language file default
+
+    # If an active template is set in DB and it's *not* 'default', try loading it
+    if active_template_name_from_db and active_template_name_from_db != "default":
+        loaded_template = None
+        try:
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("SELECT template_text FROM welcome_messages WHERE name = ?", (active_template_name_from_db,))
+            template_row = c.fetchone()
+            if template_row:
+                loaded_template = template_row['template_text']
+                logger.info(f"Using active welcome message template from DB: '{active_template_name_from_db}'")
+            else:
+                logger.warning(f"Active template '{active_template_name_from_db}' set in DB but not found in templates table. Falling back to default.")
+        except sqlite3.Error as e:
+            logger.error(f"DB error loading specific welcome template '{active_template_name_from_db}': {e}")
+        finally:
+            if conn: conn.close()
+
+        if loaded_template:
+             welcome_template_to_use = loaded_template
+    else:
+        logger.info("Using default welcome message from language file (no active custom template set).")
+
+
+    # --- Format the chosen template ---
     status = get_user_status(purchases)
     balance_str = format_currency(balance)
-    welcome_template = lang_data.get("welcome", "👋 Welcome, {username}!") # Use passed lang_data
-    status_label = lang_data.get("status_label", "Status")
-    balance_label = lang_data.get("balance_label", "Balance")
-    purchases_label = lang_data.get("purchases_label", "Total Purchases")
-    basket_label = lang_data.get("basket_label", "Basket Items")
-    shopping_prompt = lang_data.get("shopping_prompt", "Start shopping or explore your options below.")
-    refund_note = lang_data.get("refund_note", "Note: No refunds.")
     progress_bar_str = get_progress_bar(purchases)
-    status_line = f"{EMOJI_PROFILE} {status_label}: {status} {progress_bar_str}"
-    balance_line = f"{EMOJI_PRICE} {balance_label}: {balance_str} EUR"
-    purchases_line = f"📦 {purchases_label}: {purchases}"
-    basket_line = f"{EMOJI_BASKET} {basket_label}: {basket_count}"
-    welcome_part = welcome_template.format(username=username)
-    full_welcome = (
-        f"{welcome_part}\n\n{status_line}\n{balance_line}\n"
-        f"{purchases_line}\n{basket_line}\n\n{shopping_prompt}\n\n⚠️ {refund_note}"
-    )
 
-    # Build Keyboard using the PASSED lang_data
+    try:
+        full_welcome = welcome_template_to_use.format(
+            username=username,
+            status=status,
+            progress_bar=progress_bar_str,
+            balance_str=balance_str,
+            purchases=purchases,
+            basket_count=basket_count
+            # Add any other placeholders you might want to support here
+        )
+    except KeyError as e:
+        logger.error(f"Placeholder error formatting welcome message template. Missing key: {e}. Template: '{welcome_template_to_use[:100]}...' Using fallback.")
+        # Fallback to a very basic message if formatting fails
+        full_welcome = f"👋 Welcome, {username}!\n\n💰 Balance: {balance_str} EUR"
+
+
+    # --- Build Keyboard (Remains the same) ---
     shop_button_text = lang_data.get("shop_button", "Shop")
     profile_button_text = lang_data.get("profile_button", "Profile")
     top_up_button_text = lang_data.get("top_up_button", "Top Up")
@@ -199,7 +243,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
             result = c.fetchone()
             db_lang = result['language'] if result else 'en'
-            lang = db_lang if db_lang and db_lang in LANGUAGES else 'en'
+            # Need LANGUAGES here too
+            try: from utils import LANGUAGES as UTILS_LANGUAGES_START
+            except ImportError: UTILS_LANGUAGES_START = {'en': {}}
+            lang = db_lang if db_lang and db_lang in UTILS_LANGUAGES_START else 'en'
             conn.commit()
             context.user_data["lang"] = lang # Store in context
             logger.info(f"start: Set language for user {user_id} to '{lang}' from DB/default.")
@@ -1215,7 +1262,6 @@ async def handle_confirm_pay(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await send_message_with_retry(context.bot, chat_id, full_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
         await query.answer() # Acknowledge button press
 
-
 # --- NEW: Handler to Ask for Discount Code in Basket Pay Flow ---
 async def handle_apply_discount_basket_pay(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
@@ -1388,12 +1434,19 @@ async def handle_view_history(update: Update, context: ContextTypes.DEFAULT_TYPE
         msg = f"📜 {recent_purchases_title}\n\n"
         for i, purchase in enumerate(history):
             try:
+                # Ensure purchase_date is treated as UTC if no timezone info
                 dt_obj = datetime.fromisoformat(purchase['purchase_date'].replace('Z', '+00:00'))
-                date_str = dt_obj.strftime('%Y-%m-%d %H:%M')
-            except (ValueError, TypeError): date_str = unknown_date_label
-            name = purchase.get('product_name', 'N/A'); size = purchase.get('product_size', 'N/A')
-            price_str = format_currency(Decimal(str(purchase.get('price_paid', 0.0))))
-            msg += (f"{i+1}. {date_str} - {name} ({size}) - {price_str} EUR\n")
+                if dt_obj.tzinfo is None: dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+                # Convert to local time if needed, or keep as UTC/formatted
+                date_str = dt_obj.strftime('%y-%m-%d %H:%M') # Shorter date format
+            except (ValueError, TypeError):
+                date_str = "???"
+            p_type = purchase['product_type']
+            p_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
+            p_name = purchase['product_name'] or 'N/A' # Use name from purchase record if available
+            p_size = purchase['product_size'] or 'N/A'
+            p_price = format_currency(purchase['price_paid'])
+            msg += f"  - {date_str}: {p_emoji} {p_size} ({p_price}€)\n" # Simplified item display
         keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_profile_button}", callback_data="profile"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
 
     try: await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
@@ -1414,7 +1467,13 @@ async def handle_language_selection(update: Update, context: ContextTypes.DEFAUL
 
     if params:
         new_lang = params[0]
-        if new_lang in LANGUAGES:
+        try:
+            from utils import LANGUAGES as UTILS_LANGUAGES_SELECT
+        except ImportError:
+             UTILS_LANGUAGES_SELECT = {'en': {}}
+             logger.error("Could not import LANGUAGES from utils in handle_language_selection")
+
+        if new_lang in UTILS_LANGUAGES_SELECT:
             try:
                 conn = get_db_connection()
                 c = conn.cursor()
@@ -1425,7 +1484,8 @@ async def handle_language_selection(update: Update, context: ContextTypes.DEFAUL
                 context.user_data["lang"] = new_lang
                 logger.info(f"User {user_id} context language updated to {new_lang}")
 
-                new_lang_data = LANGUAGES.get(new_lang, LANGUAGES['en'])
+                # Use the just loaded LANGUAGES dict
+                new_lang_data = UTILS_LANGUAGES_SELECT.get(new_lang, UTILS_LANGUAGES_SELECT['en'])
                 language_set_answer = new_lang_data.get("language_set_answer", "Language set!")
                 await query.answer(language_set_answer.format(lang=new_lang.upper()))
 
@@ -1456,8 +1516,12 @@ async def handle_language_selection(update: Update, context: ContextTypes.DEFAUL
 async def _display_language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, current_lang: str, current_lang_data: dict):
      """Helper function to display the language selection keyboard."""
      query = update.callback_query
+     # Need LANGUAGES here
+     try: from utils import LANGUAGES as UTILS_LANGUAGES_DISPLAY
+     except ImportError: UTILS_LANGUAGES_DISPLAY = {'en': {}}
+
      keyboard = []
-     for lang_code, lang_dict_for_name in LANGUAGES.items():
+     for lang_code, lang_dict_for_name in UTILS_LANGUAGES_DISPLAY.items():
          lang_name = lang_dict_for_name.get("native_name", lang_code.upper())
          keyboard.append([InlineKeyboardButton(f"{lang_name} {'✅' if lang_code == current_lang else ''}", callback_data=f"language|{lang_code}")])
      back_button_text = current_lang_data.get("back_button", "Back")
