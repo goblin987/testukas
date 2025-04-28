@@ -573,11 +573,14 @@ async def handle_sales_run(update: Update, context: ContextTypes.DEFAULT_TYPE, p
             else: msg += "No sales data for this period."
         elif report_type == "top_prod":
             c.execute(f"""
-                SELECT p.name as product_name, p.size as product_size, p.product_type, COALESCE(SUM(pu.price_paid), 0.0) as prod_revenue, COUNT(pu.id) as prod_units
-                FROM purchases pu JOIN products p ON pu.product_id = p.id
+                SELECT pu.product_name, pu.product_size, pu.product_type,
+                       COALESCE(SUM(pu.price_paid), 0.0) as prod_revenue,
+                       COUNT(pu.id) as prod_units
+                FROM purchases pu
                 WHERE pu.purchase_date BETWEEN ? AND ?
-                GROUP BY p.name, p.size ORDER BY prod_revenue DESC LIMIT 10
-            """, base_params)
+                GROUP BY pu.product_name, pu.product_size, pu.product_type
+                ORDER BY prod_revenue DESC LIMIT 10
+            """, base_params) # Simplified query relying on purchase record details
             results = c.fetchall()
             msg = f"🏆 Top Products: {period_title}\n\n"
             if results:
@@ -1370,7 +1373,8 @@ async def handle_adm_manage_discounts(update: Update, context: ContextTypes.DEFA
                 expiry_info = ""
                 if code['expiry_date']:
                      try:
-                         expiry_dt = datetime.fromisoformat(code['expiry_date']).replace(tzinfo=timezone.utc) # Assume UTC
+                         # Ensure stored date is treated as UTC before comparison
+                         expiry_dt = datetime.fromisoformat(code['expiry_date']).replace(tzinfo=timezone.utc)
                          expiry_info = f" | Expires: {expiry_dt.strftime('%Y-%m-%d')}"
                          # Compare with current UTC time
                          if datetime.now(timezone.utc) > expiry_dt and code['is_active']: status = "⏳ Expired"
@@ -2124,8 +2128,6 @@ async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAUL
     except Exception as e:
         logger.error(f"Unexpected error in handle_adm_manage_welcome: {e}", exc_info=True)
         await query.answer("An error occurred displaying the menu.", show_alert=True)
-
-# --- END OF NEW FUNCTION ---
 
 async def handle_adm_activate_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     """Activates the selected welcome message template."""
@@ -3018,4 +3020,3 @@ async def handle_adm_welcome_template_text_message(update: Update, context: Cont
     await send_message_with_retry(context.bot, chat_id, menu_msg, reply_markup=InlineKeyboardMarkup(menu_keyboard), parse_mode=None)
 
 
-# --- Admin Message Handlers (Existing - Kept for completeness) ---
