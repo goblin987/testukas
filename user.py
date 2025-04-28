@@ -23,9 +23,8 @@ from utils import (
     NOWPAYMENTS_API_KEY, # Check if NOWPayments is configured
     get_db_connection, MEDIA_DIR, # Import helper and MEDIA_DIR
     DEFAULT_PRODUCT_EMOJI, # Import default emoji
-    load_active_welcome_message, # <<< Import welcome message loader
-    DEFAULT_WELCOME_MESSAGE # <<< Import default welcome message
-    # Removed LANGUAGES import here as it's loaded within _get_lang_data if needed
+    load_active_welcome_message, # <<< Import welcome message loader (though we'll modify its usage)
+    DEFAULT_WELCOME_MESSAGE # <<< Import default welcome message fallback
 )
 import json # <<< Make sure json is imported
 import payment # <<< Make sure payment module is imported
@@ -82,8 +81,9 @@ def _build_start_menu_content(user_id: int, username: str, lang_data: dict, cont
 
     balance, purchases, basket_count = Decimal('0.0'), 0, 0
     conn = None
-    active_template_name_from_db = None # <<< NEW: Variable to store DB setting
+    active_template_name_from_db = None # Variable to store DB setting
 
+    # --- Initial Data Fetch ---
     try:
         conn = get_db_connection()
         c = conn.cursor()
@@ -94,12 +94,15 @@ def _build_start_menu_content(user_id: int, username: str, lang_data: dict, cont
             balance = Decimal(str(result['balance']))
             purchases = result['total_purchases']
 
-        # <<< NEW: Get active welcome template name setting >>>
+        # Get active welcome template name setting
         c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
         setting_row = c.fetchone()
-        if setting_row:
+        if setting_row and setting_row['setting_value']: # Check if value is not None/empty
             active_template_name_from_db = setting_row['setting_value']
-        # <<< END NEW >>>
+            logger.info(f"Active welcome template name from settings: '{active_template_name_from_db}'")
+        else:
+            active_template_name_from_db = "default" # Fallback to 'default' if setting is missing/empty
+            logger.info("Active welcome message name not found in settings, falling back to 'default'.")
 
         clear_expired_basket(context, user_id)
         basket = context.user_data.get("basket", [])
@@ -107,37 +110,39 @@ def _build_start_menu_content(user_id: int, username: str, lang_data: dict, cont
         if not basket: context.user_data.pop('applied_discount', None)
 
     except sqlite3.Error as e:
-        logger.error(f"Database error fetching data for start menu build (user {user_id}): {e}", exc_info=True)
-        active_template_name_from_db = None # Fallback on DB error
+        logger.error(f"Database error fetching initial data for start menu build (user {user_id}): {e}", exc_info=True)
+        active_template_name_from_db = "default" # Fallback on DB error fetching setting
     finally:
         if conn: conn.close()
 
     # --- Determine which template text to use ---
-    welcome_template_to_use = lang_data.get('welcome', DEFAULT_WELCOME_MESSAGE) # Start with the language file default
+    welcome_template_to_use = None # Start with None
 
-    # If an active template is set in DB and it's *not* 'default', try loading it
-    if active_template_name_from_db and active_template_name_from_db != "default":
-        loaded_template = None
+    # <<< MODIFICATION START: Always try to load the active template from DB >>>
+    if active_template_name_from_db: # Only try if we have a name (even if it's 'default')
+        conn_load = None
         try:
-            conn = get_db_connection()
-            c = conn.cursor()
-            c.execute("SELECT template_text FROM welcome_messages WHERE name = ?", (active_template_name_from_db,))
-            template_row = c.fetchone()
+            conn_load = get_db_connection()
+            c_load = conn_load.cursor()
+            c_load.execute("SELECT template_text FROM welcome_messages WHERE name = ?", (active_template_name_from_db,))
+            template_row = c_load.fetchone()
             if template_row:
-                loaded_template = template_row['template_text']
-                logger.info(f"Using active welcome message template from DB: '{active_template_name_from_db}'")
+                welcome_template_to_use = template_row['template_text']
+                logger.info(f"Using welcome message template from DB: '{active_template_name_from_db}'")
             else:
-                logger.warning(f"Active template '{active_template_name_from_db}' set in DB but not found in templates table. Falling back to default.")
+                logger.warning(f"Active template '{active_template_name_from_db}' set in DB but not found in templates table. Will fall back.")
+                # welcome_template_to_use remains None
         except sqlite3.Error as e:
             logger.error(f"DB error loading specific welcome template '{active_template_name_from_db}': {e}")
+            # welcome_template_to_use remains None
         finally:
-            if conn: conn.close()
+            if conn_load: conn_load.close()
 
-        if loaded_template:
-             welcome_template_to_use = loaded_template
-    else:
-        logger.info("Using default welcome message from language file (no active custom template set).")
-
+    # Fallback logic if DB load failed or no active name was determined initially
+    if welcome_template_to_use is None:
+        logger.warning("Falling back to default welcome message defined in LANGUAGES.")
+        welcome_template_to_use = lang_data.get('welcome', DEFAULT_WELCOME_MESSAGE) # Use language file default OR hardcoded default
+    # <<< MODIFICATION END >>>
 
     # --- Format the chosen template ---
     status = get_user_status(purchases)
@@ -145,18 +150,26 @@ def _build_start_menu_content(user_id: int, username: str, lang_data: dict, cont
     progress_bar_str = get_progress_bar(purchases)
 
     try:
+        # Escape username just in case, though it's usually safe from Telegram
+        escaped_username = helpers.escape_markdown(username, version=2)
+        # Don't escape the placeholders themselves, they contain the values
         full_welcome = welcome_template_to_use.format(
-            username=username,
+            username=escaped_username, # Use the escaped version
             status=status,
             progress_bar=progress_bar_str,
             balance_str=balance_str,
             purchases=purchases,
             basket_count=basket_count
             # Add any other placeholders you might want to support here
-        )
+        ).replace('\\*', '*').replace('\\_', '_').replace('\\`', '`') # Basic unescaping for allowed markdown in template
+        # Note: A more robust markdown parser might be needed if complex formatting is allowed in templates
+
     except KeyError as e:
         logger.error(f"Placeholder error formatting welcome message template. Missing key: {e}. Template: '{welcome_template_to_use[:100]}...' Using fallback.")
         # Fallback to a very basic message if formatting fails
+        full_welcome = f"👋 Welcome, {username}!\n\n💰 Balance: {balance_str} EUR"
+    except Exception as format_e:
+        logger.error(f"Unexpected error formatting welcome message: {format_e}. Template: '{welcome_template_to_use[:100]}...' Using fallback.")
         full_welcome = f"👋 Welcome, {username}!\n\n💰 Balance: {balance_str} EUR"
 
 
@@ -770,9 +783,9 @@ def validate_discount_code(code_text: str, current_total_float: float) -> tuple[
         if not code_data['is_active']: return False, inactive_msg, None
         if code_data['expiry_date']:
             try:
-                expiry_dt = datetime.fromisoformat(code_data['expiry_date'])
-                if expiry_dt.tzinfo is None: expiry_dt = expiry_dt.astimezone()
-                if datetime.now(expiry_dt.tzinfo) > expiry_dt: return False, expired_msg, None
+                # Ensure stored date is treated as UTC before comparison
+                expiry_dt = datetime.fromisoformat(code_data['expiry_date']).replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > expiry_dt: return False, expired_msg, None
             except ValueError: logger.warning(f"Invalid expiry_date format DB code {code_data['code']}"); return False, invalid_expiry_msg, None
         if code_data['max_uses'] is not None and code_data['uses_count'] >= code_data['max_uses']: return False, limit_reached_msg, None
 
@@ -1441,11 +1454,11 @@ async def handle_view_history(update: Update, context: ContextTypes.DEFAULT_TYPE
                 date_str = dt_obj.strftime('%y-%m-%d %H:%M') # Shorter date format
             except (ValueError, TypeError):
                 date_str = "???"
-            p_type = purchase['product_type']
+            p_type = purchase.get('product_type', 'Product') # Use get with fallback
             p_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
-            p_name = purchase['product_name'] or 'N/A' # Use name from purchase record if available
-            p_size = purchase['product_size'] or 'N/A'
-            p_price = format_currency(purchase['price_paid'])
+            p_name = purchase.get('product_name', 'N/A') # Use name from purchase record if available
+            p_size = purchase.get('product_size', 'N/A')
+            p_price = format_currency(purchase.get('price_paid', 0))
             msg += f"  - {date_str}: {p_emoji} {p_size} ({p_price}€)\n" # Simplified item display
         keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_profile_button}", callback_data="profile"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
 
