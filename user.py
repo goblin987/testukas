@@ -118,7 +118,7 @@ def _build_start_menu_content(user_id: int, username: str, lang_data: dict, cont
     # --- Determine which template text to use ---
     welcome_template_to_use = None # Start with None
 
-    # <<< MODIFICATION START: Always try to load the active template from DB >>>
+    # <<< FIX: Always try to load the active template from DB >>>
     if active_template_name_from_db: # Only try if we have a name (even if it's 'default')
         conn_load = None
         try:
@@ -142,7 +142,7 @@ def _build_start_menu_content(user_id: int, username: str, lang_data: dict, cont
     if welcome_template_to_use is None:
         logger.warning("Falling back to default welcome message defined in LANGUAGES.")
         welcome_template_to_use = lang_data.get('welcome', DEFAULT_WELCOME_MESSAGE) # Use language file default OR hardcoded default
-    # <<< MODIFICATION END >>>
+    # <<< END FIX >>>
 
     # --- Format the chosen template ---
     status = get_user_status(purchases)
@@ -215,26 +215,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Check if file exists using asyncio.to_thread
         if await asyncio.to_thread(os.path.exists, media_path):
             try:
-                # --- FIX STARTS HERE ---
                 # Pass the file path directly to the send_* methods
                 if media_type == "photo":
                     await context.bot.send_photo(chat_id=chat_id, photo=media_path)
                 elif media_type == "video":
                     await context.bot.send_video(chat_id=chat_id, video=media_path)
                 elif media_type == "gif":
-                    # Note: GIFs might be sent as animation or video depending on how they were saved.
-                    # If saved as .mp4 (common for GIFs by bots), send_animation is usually correct.
-                    # If saved as .gif, send_animation should also work.
                     await context.bot.send_animation(chat_id=chat_id, animation=media_path)
                 else:
                     logger.warning(f"Unsupported BOT_MEDIA type for sending: {media_type}")
-                # --- FIX ENDS HERE ---
 
             except telegram_error.TelegramError as e:
-                # Catch potential errors during sending (e.g., file too large, network issue)
                 logger.error(f"Error sending BOT_MEDIA ({media_path}): {e}", exc_info=True)
             except Exception as e:
-                # Catch any other unexpected errors during sending
                 logger.error(f"Unexpected error sending BOT_MEDIA ({media_path}): {e}", exc_info=True)
         else:
             logger.warning(f"BOT_MEDIA path {media_path} not found on disk when trying to send.")
