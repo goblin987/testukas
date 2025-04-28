@@ -43,7 +43,8 @@ from utils import (
     set_active_welcome_message,
     DEFAULT_WELCOME_MESSAGE, # Fallback if needed
     # User status helpers
-    get_user_status, get_progress_bar
+    get_user_status, get_progress_bar,
+    _get_lang_data  # <<<===== IMPORT THE HELPER =====>>>
 )
 # --- Import viewer admin handlers ---
 # These now include the user management handlers
@@ -1272,8 +1273,8 @@ async def handle_adm_edit_type_menu(update: Update, context: ContextTypes.DEFAUL
     current_description = "(Description not applicable for Product Types)" # Placeholder
 
     # <<< FIX: Escape name and description before using in Markdown >>>
-    safe_name = helpers.escape_markdown(type_name, version=2)
-    safe_desc = helpers.escape_markdown(current_description, version=2)
+    safe_name = type_name # No Markdown V2 here
+    safe_desc = current_description # No Markdown V2 here
 
     msg_template = lang_data.get("admin_edit_type_menu", "🧩 Editing Type: {type_name}\n\nCurrent Emoji: {emoji}\n{description}\n\nWhat would you like to do?")
     msg = msg_template.format(type_name=safe_name, emoji=current_emoji, description=safe_desc)
@@ -1284,13 +1285,13 @@ async def handle_adm_edit_type_menu(update: Update, context: ContextTypes.DEFAUL
     keyboard = [
         [InlineKeyboardButton(change_emoji_button_text, callback_data=f"adm_change_type_emoji|{type_name}")],
         # [InlineKeyboardButton(change_desc_button_text, callback_data=f"adm_edit_type_desc|{type_name}")],
-        [InlineKeyboardButton(f"🗑️ Delete {helpers.escape_markdown(type_name, version=2)}", callback_data=f"adm_delete_type|{type_name}")],
+        [InlineKeyboardButton(f"🗑️ Delete {type_name}", callback_data=f"adm_delete_type|{type_name}")],
         [InlineKeyboardButton("⬅️ Back to Types", callback_data="adm_manage_types")]
     ]
 
     try:
         # <<< FIX: Change parse_mode to None to avoid errors >>>
-        await query.edit_message_text(msg.replace('*','').replace('_','').replace('\\(','(').replace('\\)',')'), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
     except telegram_error.BadRequest as e:
         if "message is not modified" in str(e).lower(): await query.answer()
         else:
@@ -2023,8 +2024,8 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
             else: conn.rollback(); success_msg = f"❌ Error: Welcome template '{name_to_delete}' not found."
         # <<< Reset Welcome Message Logic >>>
         elif action_type == "reset_default_welcome":
-            lang_data = LANGUAGES.get('en', {}) # Use English for internal messages and default text
-            default_text = lang_data.get('welcome', DEFAULT_WELCOME_MESSAGE) # Use default from English or hardcoded
+            lang_data_en = LANGUAGES.get('en', {}) # Use English for internal messages and default text
+            default_text = lang_data_en.get('welcome', DEFAULT_WELCOME_MESSAGE) # Use default from English or hardcoded
             # Update the text in the DB
             update_res = c.execute("UPDATE welcome_messages SET template_text = ?, description = ? WHERE name = ?",
                                    (default_text, "Built-in default message (EN)", "default"))
@@ -2039,8 +2040,7 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
                       ("active_welcome_message_name", "default"))
             conn.commit()
             # Use language from user_data for the success message display
-            user_lang = context.user_data.get("lang", "en")
-            display_lang_data = LANGUAGES.get(user_lang, LANGUAGES['en'])
+            user_lang, display_lang_data = _get_lang_data(context) # Use helper
             success_msg = display_lang_data.get("welcome_reset_success", "✅ 'default' template reset and activated.")
             next_callback = "adm_manage_welcome|0"
         # <<< End Welcome Message Logic >>>
@@ -2075,8 +2075,7 @@ async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAUL
     if query.from_user.id != ADMIN_ID:
         return await query.answer("Access Denied.", show_alert=True)
 
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    lang, lang_data = _get_lang_data(context) # Use helper
     offset = 0
     if params and len(params) > 0 and params[0].isdigit():
         offset = int(params[0])
@@ -2257,12 +2256,12 @@ async def handle_adm_edit_welcome(update: Update, context: ContextTypes.DEFAULT_
     context.user_data['editing_welcome_template_name'] = template_name
     context.user_data['editing_welcome_offset'] = offset
 
-    # <<< FIX: Escape name and description >>>
-    safe_name = helpers.escape_markdown(template_name, version=2)
-    safe_desc = helpers.escape_markdown(current_description or 'Not set', version=2)
+    # Display using plain text
+    safe_name = template_name
+    safe_desc = current_description or 'Not set'
 
-    msg = f"✏️ Editing Template: *{safe_name}*\n\n"
-    msg += f"📝 Description: _{safe_desc}_\n\n"
+    msg = f"✏️ Editing Template: {safe_name}\n\n"
+    msg += f"📝 Description: {safe_desc}\n\n"
     msg += "Choose what to edit:"
 
     keyboard = [
@@ -2271,10 +2270,7 @@ async def handle_adm_edit_welcome(update: Update, context: ContextTypes.DEFAULT_
         [InlineKeyboardButton("⬅️ Back", callback_data=f"adm_manage_welcome|{offset}")]
     ]
     try:
-        # <<< FIX: Change parse_mode to None to avoid errors >>>
-        # Also manually remove markdown chars for plain text display
-        plain_msg = msg.replace("*", "").replace("_", "").replace("\\", "")
-        await query.edit_message_text(plain_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
     except telegram_error.BadRequest as e:
         if "message is not modified" not in str(e).lower(): logger.error(f"Error editing edit welcome menu: {e}. Message: {msg}")
         else: await query.answer() # Acknowledge if not modified
@@ -2310,13 +2306,13 @@ async def handle_adm_edit_welcome_text(update: Update, context: ContextTypes.DEF
     context.user_data['editing_welcome_template_name'] = template_name # Ensure it's set
     context.user_data['editing_welcome_field'] = 'text' # Indicate we are editing text
 
-    placeholders = "`{username}`, `{status}`, `{progress_bar}`, `{balance_str}`, `{purchases}`, `{basket_count}`"
+    placeholders = "{username}, {status}, {progress_bar}, {balance_str}, {purchases}, {basket_count}" # Plain text placeholders
     prompt_template = lang_data.get("welcome_edit_text_prompt", "Editing Text for '{name}'. Current text:\n\n{current_text}\n\nPlease reply with the new text. Available placeholders:\n{placeholders}")
-    # Escape name and current text for display (plain text mode)
+    # Display plain text
     prompt = prompt_template.format(
         name=template_name,
         current_text=current_text,
-        placeholders=placeholders.replace('`','') # Remove backticks for plain text
+        placeholders=placeholders
     )
     if len(prompt) > 4000: prompt = prompt[:4000] + "\n[... Current text truncated ...]"
 
@@ -3391,6 +3387,3 @@ async def handle_adm_welcome_description_edit_message(update: Update, context: C
 
 # --- Admin Message Handlers (Existing - Kept for completeness) ---
 # These handlers are mapped in main.py's STATE_HANDLERS dictionary
-
-# --- END OF FILE admin.py ---
-
