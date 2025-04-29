@@ -184,7 +184,6 @@ LANGUAGES = {
         "back_basket_button": "Back to Basket",
         "error_adding_db": "Error: Database issue adding item to basket.",
         "error_adding_unexpected": "Error: An unexpected issue occurred.",
-        # Reseller Discount specific basket text
         "reseller_discount_label": "Reseller Discount", # <<< NEW
 
         # --- Discounts ---
@@ -1017,10 +1016,36 @@ def init_db():
             # <<< END ADDED >>>
 
             # Insert initial welcome messages (only if table was just created or empty - handled by INSERT OR IGNORE)
-            initial_templates = [ ("default", LANGUAGES['en']['welcome'], "Built-in default message (EN)"), # ... other templates ... ]
+            # <<< CORRECTED Syntax Error >>>
+            initial_templates = [
+                ("default", LANGUAGES['en']['welcome'], "Built-in default message (EN)"),
+                ("clean", "👋 Hello, {username}!\n\n💰 Balance: {balance_str} EUR\n⭐ Status: {status}\n🛒 Basket: {basket_count} item(s)\n\nReady to shop or manage your profile? Explore the options below! 👇\n\n⚠️ Note: No refunds.", "Clean and direct style"),
+                ("enthusiastic", "✨ Welcome back, {username}! ✨\n\nReady for more? You've got **{balance_str} EUR** to spend! 💸\nYour basket ({basket_count} items) is waiting for you! 🛒\n\nYour current status: {status} {progress_bar}\nTotal Purchases: {purchases}\n\n👇 Dive back into the shop or check your profile! 👇\n\n⚠️ Note: No refunds.", "Enthusiastic style with emojis"),
+                ("status_focus", "👑 Welcome, {username}! ({status}) 👑\n\nTrack your journey: {progress_bar}\nTotal Purchases: {purchases}\n\n💰 Balance: {balance_str} EUR\n🛒 Basket: {basket_count} item(s)\n\nManage your profile or explore the shop! 👇\n\n⚠️ Note: No refunds.", "Focuses on status and progress"),
+                ("minimalist", "Welcome, {username}.\n\nBalance: {balance_str} EUR\nBasket: {basket_count}\nStatus: {status}\n\nUse the menu below to navigate.\n\n⚠️ Note: No refunds.", "Simple, minimal text"),
+                ("basket_focus", "Welcome back, {username}!\n\n🛒 You have **{basket_count} item(s)** in your basket! Don't forget about them!\n💰 Balance: {balance_str} EUR\n⭐ Status: {status} ({purchases} total purchases)\n\nCheck out your basket, keep shopping, or top up! 👇\n\n⚠️ Note: No refunds.", "Reminds user about items in basket")
+            ]
+            # <<< END CORRECTION >>>
+            inserted_count = 0
+            changes_before = conn.total_changes # Get changes before loop
             for name, text, desc in initial_templates:
-                c.execute("INSERT OR IGNORE INTO welcome_messages (name, template_text, description) VALUES (?, ?, ?)", (name, text, desc))
-            c.execute("INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)", ("active_welcome_message_name", "default"))
+                try:
+                    # Use INSERT OR IGNORE to avoid errors if templates already exist
+                    c.execute("INSERT OR IGNORE INTO welcome_messages (name, template_text, description) VALUES (?, ?, ?)", (name, text, desc))
+                except sqlite3.Error as insert_e: # Catch potential errors during insert
+                    logger.error(f"Error inserting template '{name}': {insert_e}")
+            changes_after = conn.total_changes # Get changes after loop
+            inserted_count = changes_after - changes_before # Calculate the difference
+
+            if inserted_count > 0:
+                logger.info(f"Checked/Inserted {inserted_count} initial welcome message templates.")
+            else:
+                logger.info("Initial welcome message templates already exist or failed to insert.")
+
+            # Set default as active if setting doesn't exist
+            c.execute("INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
+                      ("active_welcome_message_name", "default"))
+            logger.info("Ensured 'default' is set as active welcome message in settings if not already set.")
 
             # Create Indices
             c.execute("CREATE INDEX IF NOT EXISTS idx_product_media_product_id ON product_media(product_id)")
@@ -1221,7 +1246,6 @@ else: logger.info(f"{BOT_MEDIA_JSON_PATH} not found. Bot starting without defaul
 
 
 # --- Utility Functions ---
-# >>> ADD _get_lang_data function here <<<
 def _get_lang_data(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, dict]:
     """Gets the current language code and corresponding language data dictionary."""
     lang = context.user_data.get("lang", "en")
@@ -1230,10 +1254,6 @@ def _get_lang_data(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, dict]:
     if lang not in LANGUAGES:
         logger.warning(f"_get_lang_data: Language '{lang}' not found in LANGUAGES dict. Falling back to 'en'.")
         lang = 'en' # Ensure lang variable reflects the fallback
-
-    # Debugging is now inside the user/admin functions that call this
-    # keys_sample = list(lang_data.keys())[:5]
-    # logger.debug(f"_get_lang_data: Returning lang '{lang}' and lang_data keys sample: {keys_sample}...")
     return lang, lang_data
 
 def format_currency(value):
@@ -1340,8 +1360,9 @@ def clear_expired_basket(context: ContextTypes.DEFAULT_TYPE, user_id: int):
         product_prices = {}
         if potential_prod_ids:
              placeholders = ','.join('?' * len(potential_prod_ids))
-             c.execute(f"SELECT id, price, product_type FROM products WHERE id IN ({placeholders})", potential_prod_ids) # <<< ADDED product_type fetch
-             # <<< UPDATED to store dict >>>
+             # <<< FETCH product_type as well >>>
+             c.execute(f"SELECT id, price, product_type FROM products WHERE id IN ({placeholders})", potential_prod_ids)
+             # <<< Store price and type >>>
              product_prices = {row['id']: {'price': Decimal(str(row['price'])), 'type': row['product_type']} for row in c.fetchall()}
         for item_str in items:
             if not item_str: continue
@@ -1350,10 +1371,11 @@ def clear_expired_basket(context: ContextTypes.DEFAULT_TYPE, user_id: int):
                 if current_time - ts <= BASKET_TIMEOUT:
                     valid_items_str_list.append(item_str)
                     if prod_id in product_prices:
+                        # <<< Add product_type to context item >>>
                         valid_items_userdata_list.append({
                             "product_id": prod_id,
                             "price": product_prices[prod_id]['price'], # Original price
-                            "product_type": product_prices[prod_id]['type'], # <<< ADDED product_type
+                            "product_type": product_prices[prod_id]['type'],
                             "timestamp": ts
                         })
                     else: logger.warning(f"P{prod_id} price/type not found during basket validation (user {user_id}).")
