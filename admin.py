@@ -737,7 +737,7 @@ async def handle_confirm_add_drop(update: Update, context: ContextTypes.DEFAULT_
     try:
         conn = get_db_connection(); c = conn.cursor(); c.execute("BEGIN")
         c.execute("""INSERT INTO products (city, district, product_type, size, name, price, available, reserved, original_text, added_by, added_date) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)""",
-                  (city, district, p_type, size, product_name, price, original_text, ADMIN_ID, datetime.now(timezone.utc).isoformat()))
+                  (city, district, p_type, size, price, original_text, ADMIN_ID, datetime.now(timezone.utc).isoformat()))
         product_id = c.lastrowid
         if product_id and media_list and temp_dir:
             final_media_dir = os.path.join(MEDIA_DIR, str(product_id)); await asyncio.to_thread(os.makedirs, final_media_dir, exist_ok=True); media_inserts = []
@@ -788,14 +788,15 @@ async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE, params=
         media_group_id = user_specific_data.pop('collecting_media_group_id', None)
         if media_group_id: job_name = f"process_media_group_{user_id}_{media_group_id}"; remove_job_if_exists(job_name, context)
     if query:
-         try: await query.edit_message_text("❌ Add Product Cancelled", parse_mode=None)
-        # --- CORRECTED BLOCK ---
-except telegram_error.BadRequest as e:
-    if "message is not modified" in str(e).lower():
-        pass # It's okay if the message wasn't modified
-    else:
-        logger.error(f"Error editing cancel message: {e}")
-# --- END CORRECTION ---
+         try:
+             await query.edit_message_text("❌ Add Product Cancelled", parse_mode=None)
+         # --- CORRECTED BLOCK ---
+         except telegram_error.BadRequest as e:
+             if "message is not modified" in str(e).lower():
+                 pass # It's okay if the message wasn't modified
+             else:
+                 logger.error(f"Error editing cancel message: {e}")
+         # --- END CORRECTION ---
          keyboard = [[InlineKeyboardButton("🔧 Admin Menu", callback_data="admin_menu"), InlineKeyboardButton("🏠 User Home", callback_data="back_start")]]; await send_message_with_retry(context.bot, query.message.chat_id, "Returning to Admin Menu.", reply_markup=InlineKeyboardMarkup(keyboard))
     elif update.message: await send_message_with_retry(context.bot, update.message.chat_id, "Add product cancelled.")
     else: logger.info("Add product flow cancelled internally (no query/message object).")
@@ -1137,7 +1138,7 @@ async def handle_adm_delete_prod(update: Update, context: ContextTypes.DEFAULT_T
     except ValueError: return await query.answer("Error: Invalid Product ID.", show_alert=True)
     product_name = f"Product ID {product_id}"
     product_details = ""
-    back_callback_data = "adm_manage_products"
+    back_callback = "adm_manage_products" # Default back location
     conn = None # Initialize conn
     try:
         conn = get_db_connection() # Use helper
@@ -1156,7 +1157,7 @@ async def handle_adm_delete_prod(update: Update, context: ContextTypes.DEFAULT_T
             product_name = result['name'] or product_name
             product_details = f"{emoji} {type_name} {result['size']} ({format_currency(result['price'])}€) in {result['city']}/{result['district']}"
             if result['city_id'] and result['dist_id'] and result['product_type']:
-                back_callback_data = f"adm_manage_products_type|{result['city_id']}|{result['dist_id']}|{result['product_type']}"
+                back_callback = f"adm_manage_products_type|{result['city_id']}|{result['dist_id']}|{result['product_type']}"
             else: logger.warning(f"Could not retrieve full details for product {product_id} during delete confirmation.")
         else:
             return await query.edit_message_text("Error: Product not found.", parse_mode=None)
@@ -1169,7 +1170,7 @@ async def handle_adm_delete_prod(update: Update, context: ContextTypes.DEFAULT_T
     msg = (f"⚠️ Confirm Deletion\n\nAre you sure you want to permanently delete this specific product instance?\n"
            f"Product ID: {product_id}\nDetails: {product_details}\n\n🚨 This action is irreversible!")
     keyboard = [[InlineKeyboardButton("✅ Yes, Delete Product", callback_data="confirm_yes"),
-                 InlineKeyboardButton("❌ No, Cancel", callback_data=back_callback)]]
+                 InlineKeyboardButton("❌ No, Cancel", callback_data=back_callback)]] # Use dynamic back callback
     await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
 
@@ -1204,21 +1205,35 @@ async def handle_adm_edit_type_menu(update: Update, context: ContextTypes.DEFAUL
     type_name = params[0]
     current_emoji = PRODUCT_TYPES.get(type_name, DEFAULT_PRODUCT_EMOJI)
 
-    # Fetch current description (This part seems incorrect in original, product types don't have desc)
-    current_description = "(Description not applicable for Product Types)" # Placeholder
+    # Fetch current description
+    current_description = ""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT description FROM product_types WHERE name = ?", (type_name,))
+        res = c.fetchone()
+        if res: current_description = res['description'] or "(Description not set)"
+        else: current_description = "(Type not found in DB)"
+    except sqlite3.Error as e:
+        logger.error(f"Error fetching description for type {type_name}: {e}")
+        current_description = "(DB Error fetching description)"
+    finally:
+        if conn: conn.close()
+
 
     safe_name = type_name # No Markdown V2 here
     safe_desc = current_description # No Markdown V2 here
 
-    msg_template = lang_data.get("admin_edit_type_menu", "🧩 Editing Type: {type_name}\n\nCurrent Emoji: {emoji}\n{description}\n\nWhat would you like to do?")
+    msg_template = lang_data.get("admin_edit_type_menu", "🧩 Editing Type: {type_name}\n\nCurrent Emoji: {emoji}\nDescription: {description}\n\nWhat would you like to do?")
     msg = msg_template.format(type_name=safe_name, emoji=current_emoji, description=safe_desc)
 
     change_emoji_button_text = lang_data.get("admin_edit_type_emoji_button", "✏️ Change Emoji")
-    # change_desc_button_text = lang_data.get("admin_edit_type_desc_button", "📝 Edit Description") # Keep commented out
+    change_desc_button_text = lang_data.get("admin_edit_type_desc_button", "📝 Edit Description") # Keep commented out
 
     keyboard = [
         [InlineKeyboardButton(change_emoji_button_text, callback_data=f"adm_change_type_emoji|{type_name}")],
-        # [InlineKeyboardButton(change_desc_button_text, callback_data=f"adm_edit_type_desc|{type_name}")],
+        # [InlineKeyboardButton(change_desc_button_text, callback_data=f"adm_edit_type_desc|{type_name}")], # Description editing for types not implemented
         [InlineKeyboardButton(f"🗑️ Delete {type_name}", callback_data=f"adm_delete_type|{type_name}")],
         [InlineKeyboardButton("⬅️ Back to Types", callback_data="adm_manage_types")]
     ]
@@ -1529,8 +1544,11 @@ async def handle_adm_manage_reviews(update: Update, context: ContextTypes.DEFAUL
     try:
         await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
     except telegram_error.BadRequest as e:
-        if "message is not modified" not in str(e).lower(): await query.answer()
-        else: logger.warning(f"Failed to edit message for adm_manage_reviews: {e}"); await query.answer("Error updating review list.", show_alert=True)
+        if "message is not modified" not in str(e).lower(): # <<< Typo fixed here
+            logger.warning(f"Failed to edit message for adm_manage_reviews: {e}")
+            await query.answer("Error updating review list.", show_alert=True)
+        else:
+            await query.answer() # <<< Acknowledge if not modified
     except Exception as e:
         logger.error(f"Unexpected error in adm_manage_reviews: {e}", exc_info=True)
         await query.edit_message_text("❌ An unexpected error occurred while loading reviews.", parse_mode=None)
@@ -1955,7 +1973,24 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
                  success_msg = f"✅ Welcome template '{name_to_delete}' deleted!"
                  next_callback = "adm_manage_welcome|0" # Go back to first page
             else: conn.rollback(); success_msg = f"❌ Error: Welcome template '{name_to_delete}' not found."
-        # <<< Reset Welcome Message Logic REMOVED >>>
+        # <<< Reset Welcome Message Logic >>>
+        elif action_type == "reset_default_welcome":
+            try:
+                # Get the built-in text
+                built_in_text = LANGUAGES['en']['welcome']
+                # Update the 'default' template text
+                c.execute("UPDATE welcome_messages SET template_text = ? WHERE name = ?", (built_in_text, "default"))
+                # Set 'default' as active
+                c.execute("INSERT OR REPLACE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
+                          ("active_welcome_message_name", "default"))
+                conn.commit()
+                success_msg = "✅ 'default' welcome template reset and activated."
+                next_callback = "adm_manage_welcome|0"
+            except Exception as reset_e:
+                 conn.rollback()
+                 logger.error(f"Error resetting default welcome message: {reset_e}", exc_info=True)
+                 success_msg = "❌ Error resetting default template."
+                 next_callback = "adm_manage_welcome|0"
         else: # Unknown action type
             logger.error(f"Unknown confirmation action type: {action_type}")
             conn.rollback()
@@ -2059,9 +2094,9 @@ async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAUL
             msg_parts.append(f"\n{escaped_page_indicator}")
 
 
-    # Add "Add New" and "Back" buttons (Reset removed)
+    # Add "Add New" and "Reset Default" buttons
     keyboard.append([InlineKeyboardButton(lang_data.get("welcome_button_add_new", "➕ Add New Template"), callback_data="adm_add_welcome_start")])
-    # <<< REMOVED Reset Button Logic >>>
+    keyboard.append([InlineKeyboardButton(lang_data.get("welcome_button_reset_default", "🔄 Reset to Built-in Default"), callback_data="adm_reset_default_confirm")]) # <<< Added Reset Button
     keyboard.append([InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="admin_menu")])
 
     final_msg = "".join(msg_parts)
@@ -2305,7 +2340,24 @@ async def handle_adm_delete_welcome_confirm(update: Update, context: ContextType
     ]
     await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
-# <<< REMOVED handle_reset_default_welcome function definition >>>
+# <<< Reset Default Welcome Handler >>>
+async def handle_reset_default_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Confirms resetting the 'default' template to the built-in text and activating it."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
+    lang, lang_data = _get_lang_data(context)
+
+    context.user_data["confirm_action"] = "reset_default_welcome"
+    title = lang_data.get("welcome_reset_confirm_title", "⚠️ Confirm Reset")
+    text = lang_data.get("welcome_reset_confirm_text", "Are you sure you want to reset the text of the 'default' template to the built-in version and activate it?")
+    msg = f"{title}\n\n{text}"
+
+    keyboard = [
+        [InlineKeyboardButton(lang_data.get("welcome_reset_button_yes", "✅ Yes, Reset & Activate"), callback_data="confirm_yes")],
+        [InlineKeyboardButton("❌ No, Cancel", callback_data="adm_manage_welcome|0")]
+    ]
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
 
 # --- Welcome Message Management Handlers --- END
 
@@ -3274,3 +3326,4 @@ async def handle_adm_welcome_description_edit_message(update: Update, context: C
 
 # --- Admin Message Handlers (Existing - Kept for completeness) ---
 # These handlers are mapped in main.py's STATE_HANDLERS dictionary
+# --- END OF FILE admin.py ---
