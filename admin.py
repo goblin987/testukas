@@ -250,8 +250,10 @@ async def handle_adm_drop_details_message(update: Update, context: ContextTypes.
 
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    # Ensure user_data is accessed correctly via application
-    user_specific_data = context.application.user_data.setdefault(user_id, {}) # <<< MODIFIED HERE
+    # --- CORRECTION ---
+    # Use context.user_data for the current user's data dictionary
+    user_specific_data = context.user_data
+    # --- END CORRECTION ---
 
     if user_id != ADMIN_ID: return
 
@@ -714,7 +716,7 @@ async def handle_confirm_add_drop(update: Update, context: ContextTypes.DEFAULT_
     user_id = query.from_user.id
     if user_id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
     chat_id = query.message.chat_id
-    user_specific_data = context.application.user_data.get(user_id, {})
+    user_specific_data = context.user_data # Use context.user_data for the admin's data
     pending_drop = user_specific_data.get("pending_drop")
 
     if not pending_drop:
@@ -737,7 +739,7 @@ async def handle_confirm_add_drop(update: Update, context: ContextTypes.DEFAULT_
     try:
         conn = get_db_connection(); c = conn.cursor(); c.execute("BEGIN")
         c.execute("""INSERT INTO products (city, district, product_type, size, name, price, available, reserved, original_text, added_by, added_date) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)""",
-                  (city, district, p_type, size, price, original_text, ADMIN_ID, datetime.now(timezone.utc).isoformat()))
+                  (city, district, p_type, size, product_name, price, original_text, ADMIN_ID, datetime.now(timezone.utc).isoformat()))
         product_id = c.lastrowid
         if product_id and media_list and temp_dir:
             final_media_dir = os.path.join(MEDIA_DIR, str(product_id)); await asyncio.to_thread(os.makedirs, final_media_dir, exist_ok=True); media_inserts = []
@@ -775,7 +777,7 @@ async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE, params=
     """Cancels the add product flow and cleans up."""
     query = update.callback_query
     user_id = update.effective_user.id
-    user_specific_data = context.application.user_data.get(user_id, {})
+    user_specific_data = context.user_data # Use context.user_data
     pending_drop = user_specific_data.get("pending_drop")
     if pending_drop and "temp_dir" in pending_drop and pending_drop["temp_dir"]:
         temp_dir_path = pending_drop["temp_dir"]
@@ -790,13 +792,11 @@ async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE, params=
     if query:
          try:
              await query.edit_message_text("❌ Add Product Cancelled", parse_mode=None)
-         # --- CORRECTED BLOCK ---
          except telegram_error.BadRequest as e:
              if "message is not modified" in str(e).lower():
                  pass # It's okay if the message wasn't modified
              else:
                  logger.error(f"Error editing cancel message: {e}")
-         # --- END CORRECTION ---
          keyboard = [[InlineKeyboardButton("🔧 Admin Menu", callback_data="admin_menu"), InlineKeyboardButton("🏠 User Home", callback_data="back_start")]]; await send_message_with_retry(context.bot, query.message.chat_id, "Returning to Admin Menu.", reply_markup=InlineKeyboardMarkup(keyboard))
     elif update.message: await send_message_with_retry(context.bot, update.message.chat_id, "Add product cancelled.")
     else: logger.info("Add product flow cancelled internally (no query/message object).")
@@ -1544,11 +1544,10 @@ async def handle_adm_manage_reviews(update: Update, context: ContextTypes.DEFAUL
     try:
         await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
     except telegram_error.BadRequest as e:
-        if "message is not modified" not in str(e).lower(): # <<< Typo fixed here
-            logger.warning(f"Failed to edit message for adm_manage_reviews: {e}")
-            await query.answer("Error updating review list.", show_alert=True)
+        if "message is not modified" not in str(e).lower():
+            logger.warning(f"Failed to edit message for adm_manage_reviews: {e}"); await query.answer("Error updating review list.", show_alert=True)
         else:
-            await query.answer() # <<< Acknowledge if not modified
+            await query.answer() # Acknowledge if not modified
     except Exception as e:
         logger.error(f"Unexpected error in adm_manage_reviews: {e}", exc_info=True)
         await query.edit_message_text("❌ An unexpected error occurred while loading reviews.", parse_mode=None)
@@ -1836,8 +1835,10 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await query.answer("Permission denied for this action.", show_alert=True)
         return
 
-    # Ensure user_data is accessed correctly via application
-    user_specific_data = context.application.user_data.setdefault(user_id, {}) # <<< MODIFIED HERE
+    # --- CORRECTION ---
+    # Use context.user_data instead of context.application.user_data.setdefault()
+    user_specific_data = context.user_data
+    # --- END CORRECTION ---
     action = user_specific_data.pop("confirm_action", None)
 
     if not action:
@@ -3323,7 +3324,3 @@ async def handle_adm_welcome_description_edit_message(update: Update, context: C
     context.user_data.pop("editing_welcome_template_name", None) # Clean up specific edit state
     context.user_data.pop("editing_welcome_field", None) # Clean up field indicator
     await _show_welcome_preview(update, context)
-
-# --- Admin Message Handlers (Existing - Kept for completeness) ---
-# These handlers are mapped in main.py's STATE_HANDLERS dictionary
-# --- END OF FILE admin.py ---
