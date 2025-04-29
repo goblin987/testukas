@@ -693,8 +693,8 @@ async def handle_add_to_basket(update: Update, context: ContextTypes.DEFAULT_TYP
         total_after_reseller = Decimal('0.0')
 
         for item in current_basket_list:
-            item_original_price = item['price']
-            item_type = item['product_type']
+            item_original_price = item.get('price', Decimal('0.0')) # Ensure it's Decimal
+            item_type = item.get('product_type', '') # Ensure it exists
             basket_original_total += item_original_price
 
             item_reseller_discount_percent = get_reseller_discount(user_id, item_type)
@@ -2031,4 +2031,3 @@ async def handle_refill_amount_message(update: Update, context: ContextTypes.DEF
         await send_message_with_retry(context.bot, chat_id, f"❌ {unexpected_error_msg}", parse_mode=None)
         context.user_data.pop('state', None)
         context.user_data.pop('refill_eur_amount', None)
-)
