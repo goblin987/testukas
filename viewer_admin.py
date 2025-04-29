@@ -106,6 +106,8 @@ async def handle_viewer_admin_menu(update: Update, context: ContextTypes.DEFAULT
         [InlineKeyboardButton("📦 View Bot Stock", callback_data="view_stock")],
         [InlineKeyboardButton("📜 View Added Products Log", callback_data="viewer_added_products|0")],
         [InlineKeyboardButton("🚫 View Reviews", callback_data="adm_manage_reviews|0")], # Reuse admin handler
+        # <<< Button REMOVED: Primary admin now handles user mgmt >>>
+        # [InlineKeyboardButton("👥 Manage Users", callback_data="adm_manage_users|0")], # Reuses admin handler
         [InlineKeyboardButton("🏠 User Home Menu", callback_data="back_start")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -384,11 +386,13 @@ async def handle_viewer_view_product_media(update: Update, context: ContextTypes
     )
 
 # ==================================================
-# --- NEW: User Management Handlers (Primary Admin) ---
+# --- User Management Handlers (NOW PRIMARY ADMIN ONLY) ---
 # ==================================================
+# Note: These functions are now primarily intended for the main admin (ADMIN_ID).
+# The access check inside confirms this. Viewer admins no longer see the button.
 
 async def handle_manage_users_start(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Displays the first page of users for management."""
+    """Displays the first page of users for management (Primary Admin only)."""
     query = update.callback_query
     if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
     offset = 0
@@ -396,10 +400,10 @@ async def handle_manage_users_start(update: Update, context: ContextTypes.DEFAUL
     await _display_user_list(update, context, offset)
 
 async def _display_user_list(update: Update, context: ContextTypes.DEFAULT_TYPE, offset: int = 0):
-    """Helper function to display a paginated list of users."""
+    """Helper function to display a paginated list of users (Primary Admin view)."""
     query = update.callback_query
     chat_id = update.effective_chat.id
-    admin_id = query.from_user.id
+    admin_id = query.from_user.id # This will be ADMIN_ID due to check in caller
     lang = context.user_data.get("lang", "en")
     lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
 
@@ -503,8 +507,8 @@ async def handle_view_user_profile(update: Update, context: ContextTypes.DEFAULT
         purchases_count = user_data['total_purchases'] # Keep the count variable name
         is_banned = user_data['is_banned'] == 1
 
-        # <<< NEW: Fetch recent purchase history >>>
-        history_limit = 5 # Show last 5 purchases in this view
+        # Fetch recent purchase history
+        history_limit = 5
         c.execute("""
             SELECT purchase_date, product_name, product_type, product_size, price_paid
             FROM purchases
@@ -513,7 +517,6 @@ async def handle_view_user_profile(update: Update, context: ContextTypes.DEFAULT
             LIMIT ?
         """, (target_user_id, history_limit))
         recent_purchases = c.fetchall()
-        # <<< END NEW >>>
 
 
         status = get_user_status(purchases_count)
@@ -533,30 +536,25 @@ async def handle_view_user_profile(update: Update, context: ContextTypes.DEFAULT
                f"📦 {purchases_label}: {purchases_count}\n" # Show total count still
                f"🚫 {banned_label}: {banned_str}")
 
-        # <<< NEW: Format and append purchase history >>>
+        # Format and append purchase history
         history_str = f"\n\n📜 Recent Purchases (Last {history_limit}):\n"
         if not recent_purchases:
             history_str += "  - No purchases found.\n"
         else:
             for purchase in recent_purchases:
                 try:
-                    # Ensure purchase_date is treated as UTC if no timezone info
                     dt_obj = datetime.fromisoformat(purchase['purchase_date'].replace('Z', '+00:00'))
                     if dt_obj.tzinfo is None: dt_obj = dt_obj.replace(tzinfo=timezone.utc)
-                    # Convert to local time if needed, or keep as UTC/formatted
-                    date_str = dt_obj.strftime('%y-%m-%d %H:%M') # Shorter date format
-                except (ValueError, TypeError):
-                    date_str = "???"
+                    date_str = dt_obj.strftime('%y-%m-%d %H:%M')
+                except (ValueError, TypeError): date_str = "???"
                 p_type = purchase['product_type']
                 p_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
-                p_name = purchase['product_name'] or 'N/A' # Use name from purchase record if available
+                p_name = purchase['product_name'] or 'N/A'
                 p_size = purchase['product_size'] or 'N/A'
                 p_price = format_currency(purchase['price_paid'])
-                history_str += f"  - {date_str}: {p_emoji} {p_size} ({p_price}€)\n" # Simplified item display
+                history_str += f"  - {date_str}: {p_emoji} {p_size} ({p_price}€)\n"
 
         msg += history_str
-        # <<< END NEW >>>
-
 
         adjust_balance_btn = lang_data.get("user_profile_button_adjust_balance", "💰 Adjust Balance")
         ban_btn_text = lang_data.get("user_profile_button_unban", "✅ Unban User") if is_banned else lang_data.get("user_profile_button_ban", "🚫 Ban User")
@@ -570,7 +568,7 @@ async def handle_view_user_profile(update: Update, context: ContextTypes.DEFAULT
 
         # Edit message (check length)
         if len(msg) > 4000: msg = msg[:4000] + "\n[... truncated]"
-        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None) # Keep parse_mode None
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
     except sqlite3.Error as e:
         logger.error(f"DB error fetching user profile for admin (target: {target_user_id}): {e}", exc_info=True)
