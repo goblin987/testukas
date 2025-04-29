@@ -35,6 +35,17 @@ from utils import ( # Ensure utils imports are correct
 )
 import user # Ensure user module is imported
 
+# --- Import Reseller Helper ---
+try:
+    from reseller_management import get_reseller_discount
+except ImportError:
+    logger_dummy_reseller = logging.getLogger(__name__ + "_dummy_reseller_payment")
+    logger_dummy_reseller.error("Could not import get_reseller_discount from reseller_management.py. Reseller discounts will not work in payment processing.")
+    # Define a dummy function that always returns zero discount
+    def get_reseller_discount(user_id: int, product_type: str) -> Decimal:
+        return Decimal('0.0')
+# -----------------------------
+
 
 logger = logging.getLogger(__name__)
 
@@ -89,18 +100,19 @@ async def _get_nowpayments_estimate(target_eur_amount: Decimal, pay_currency_cod
         return {'error': 'internal_estimate_error', 'details': str(e)}
 
 
-# --- Refactored NOWPayments Deposit Creation (Modified) ---
+# --- Refactored NOWPayments Deposit Creation (Unchanged for reseller logic) ---
 async def create_nowpayments_payment(
     user_id: int,
-    target_eur_amount: Decimal,
+    target_eur_amount: Decimal, # This should be the FINAL amount after ALL discounts
     pay_currency_code: str,
-    is_purchase: bool = False, # <<< ADDED Flag
-    basket_snapshot: list | None = None, # <<< ADDED Basket data
-    discount_code: str | None = None # <<< ADDED Discount code used
+    is_purchase: bool = False,
+    basket_snapshot: list | None = None, # Snapshot used for recording pending deposit
+    discount_code: str | None = None # General discount code used
 ) -> dict:
     """
     Creates a payment invoice using the NOWPayments API.
     Checks minimum amount. Stores extra info if it's a purchase.
+    The target_eur_amount should already account for all discounts.
     """
     if not NOWPAYMENTS_API_KEY:
         logger.error("NOWPayments API key is not configured.")
@@ -131,19 +143,15 @@ async def create_nowpayments_payment(
     if invoice_crypto_amount > estimated_crypto_amount:
         logger.warning(f"Estimated amount {estimated_crypto_amount} was below NOWPayments minimum {min_amount_api}. Using minimum for invoice: {invoice_crypto_amount} {pay_currency_code}")
 
-    # <<< NEW: Check if basket total itself is too low for the *chosen* currency >>>
-    # This check happens *before* creating the invoice
+    # Check if basket total itself is too low for the *chosen* currency
     if is_purchase and estimated_crypto_amount < min_amount_api:
          logger.warning(f"Basket purchase for user {user_id} ({target_eur_amount} EUR -> {estimated_crypto_amount} {pay_currency_code}) is below the API minimum {min_amount_api} {pay_currency_code}.")
-         # Return a specific error to the user
          return {
              'error': 'basket_pay_too_low',
              'currency': pay_currency_code.upper(),
              'min_amount': f"{min_amount_api:.8f}".rstrip('0').rstrip('.'),
              'basket_total': format_currency(target_eur_amount)
          }
-    # <<< END NEW CHECK >>>
-
 
     # 3. Prepare API Request Data
     order_id_prefix = "PURCHASE" if is_purchase else "REFILL"
@@ -202,18 +210,18 @@ async def create_nowpayments_payment(
              return {'error': 'invalid_api_response'}
 
         expected_crypto_amount_from_invoice = Decimal(str(payment_data['pay_amount']))
-        payment_data['target_eur_amount_orig'] = float(target_eur_amount)
+        payment_data['target_eur_amount_orig'] = float(target_eur_amount) # Store the FINAL EUR amount requested
         payment_data['pay_amount'] = f"{expected_crypto_amount_from_invoice:.8f}".rstrip('0').rstrip('.')
-        payment_data['is_purchase'] = is_purchase # <<< ADDED: Pass flag through response for display logic
+        payment_data['is_purchase'] = is_purchase # Pass flag through response for display logic
 
-        # 6. Store Pending Deposit Info (Using modified add_pending_deposit)
+        # 6. Store Pending Deposit Info
         add_success = await asyncio.to_thread(
             add_pending_deposit,
             payment_data['payment_id'], user_id, payment_data['pay_currency'],
             float(target_eur_amount), float(expected_crypto_amount_from_invoice),
-            is_purchase=is_purchase,               # <<< Pass flag
-            basket_snapshot=basket_snapshot,        # <<< Pass basket
-            discount_code=discount_code             # <<< Pass discount code
+            is_purchase=is_purchase,
+            basket_snapshot=basket_snapshot, # Store the snapshot
+            discount_code=discount_code      # Store general discount code used
         )
         if not add_success:
              logger.error(f"Failed to add pending deposit to DB for payment_id {payment_data['payment_id']} (user {user_id}).")
@@ -275,7 +283,7 @@ async def handle_select_refill_crypto(update: Update, context: ContextTypes.DEFA
     # Call payment creation - specify it's NOT a purchase
     payment_result = await create_nowpayments_payment(
         user_id, refill_eur_amount_decimal, selected_asset_code,
-        is_purchase=False # <<< Explicitly False for refill
+        is_purchase=False # Explicitly False for refill
     )
 
     if 'error' in payment_result:
@@ -326,10 +334,10 @@ async def handle_select_basket_crypto(update: Update, context: ContextTypes.DEFA
 
     # Retrieve stored basket context
     basket_snapshot = context.user_data.get('basket_pay_snapshot')
-    total_eur_float = context.user_data.get('basket_pay_total_eur')
-    discount_code_used = context.user_data.get('basket_pay_discount_code') # Might be None
+    final_total_eur_float = context.user_data.get('basket_pay_total_eur') # This should be the FINAL total after ALL discounts
+    discount_code_used = context.user_data.get('basket_pay_discount_code') # General discount code used
 
-    if basket_snapshot is None or total_eur_float is None:
+    if basket_snapshot is None or final_total_eur_float is None:
         logger.error(f"Basket payment context lost before crypto selection for user {user_id}.")
         await query.edit_message_text("❌ Error: Payment context lost. Please go back to your basket.",
                                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ View Basket", callback_data="view_basket")]]) ,parse_mode=None)
@@ -340,7 +348,7 @@ async def handle_select_basket_crypto(update: Update, context: ContextTypes.DEFA
         context.user_data.pop('basket_pay_discount_code', None)
         return
 
-    basket_total_eur_decimal = Decimal(str(total_eur_float))
+    final_total_eur_decimal = Decimal(str(final_total_eur_float))
 
     # Get language strings (same as refill for now, potentially customize later)
     preparing_invoice_msg = lang_data.get("preparing_invoice", "⏳ Preparing your payment invoice...")
@@ -363,10 +371,10 @@ async def handle_select_basket_crypto(update: Update, context: ContextTypes.DEFA
         if "message is not modified" not in str(e).lower(): logger.warning(f"Couldn't edit message in handle_select_basket_crypto: {e}")
         await query.answer("Preparing...")
 
-    # Call payment creation - specify it IS a purchase
+    # Call payment creation - specify it IS a purchase, pass FINAL total
     payment_result = await create_nowpayments_payment(
-        user_id, basket_total_eur_decimal, selected_asset_code,
-        is_purchase=True, # <<< Explicitly TRUE for basket payment
+        user_id, final_total_eur_decimal, selected_asset_code, # Pass final total
+        is_purchase=True,
         basket_snapshot=basket_snapshot,
         discount_code=discount_code_used
     )
@@ -383,7 +391,7 @@ async def handle_select_basket_crypto(update: Update, context: ContextTypes.DEFA
 
         error_message_to_user = failed_invoice_creation_msg # Default error
         # Handle specific errors
-        if error_code == 'basket_pay_too_low': # <<< Handle the new specific error
+        if error_code == 'basket_pay_too_low': # Handle the new specific error
             error_message_to_user = error_basket_pay_too_low_msg.format(
                 basket_total=payment_result.get('basket_total', 'N/A'),
                 currency=payment_result.get('currency', selected_asset_code.upper())
@@ -396,7 +404,7 @@ async def handle_select_basket_crypto(update: Update, context: ContextTypes.DEFA
         elif error_code == 'pending_db_error': error_message_to_user = error_pending_db_msg
         elif error_code == 'amount_too_low_api': # Should ideally not happen due to pre-check, but handle anyway
              min_amount_val = payment_result.get('min_amount', 'N/A'); crypto_amount_val = payment_result.get('crypto_amount', 'N/A')
-             target_eur_val = payment_result.get('target_eur_amount', basket_total_eur_decimal)
+             target_eur_val = payment_result.get('target_eur_amount', final_total_eur_decimal)
              error_message_to_user = error_amount_too_low_api_msg.format(target_eur_amount=format_currency(target_eur_val), currency=payment_result.get('currency', selected_asset_code.upper()), crypto_amount=crypto_amount_val, min_amount=min_amount_val)
         elif error_code in ['api_timeout', 'api_request_failed', 'api_unexpected_error', 'internal_server_error', 'internal_estimate_error']:
             error_message_to_user = error_nowpayments_api_msg
@@ -405,7 +413,7 @@ async def handle_select_basket_crypto(update: Update, context: ContextTypes.DEFA
         except Exception as edit_e: logger.error(f"Failed to edit message with basket payment creation error: {edit_e}"); await send_message_with_retry(context.bot, chat_id, error_message_to_user, reply_markup=back_button_markup, parse_mode=None)
 
         # Since payment failed, the items are still reserved in the user's main basket.
-        # We should probably send them back to the basket view.
+        # Send them back to the basket view.
         await user.handle_view_basket(update, context)
 
     else:
@@ -430,7 +438,7 @@ async def display_nowpayments_invoice(update: Update, context: ContextTypes.DEFA
         pay_amount_str = payment_data.get('pay_amount')
         pay_currency = payment_data.get('pay_currency', 'N/A').upper()
         payment_id = payment_data.get('payment_id', 'N/A')
-        target_eur_orig = payment_data.get('target_eur_amount_orig')
+        target_eur_orig = payment_data.get('target_eur_amount_orig') # Final EUR amount requested
         expiration_date_str = payment_data.get('expiration_estimate_date')
 
         if not pay_address or not pay_amount_str:
@@ -596,20 +604,18 @@ async def process_successful_refill(user_id: int, amount_to_add_eur: Decimal, pa
         if conn: conn.close()
 
 
-# --- HELPER: Finalize Purchase (Shared Logic) ---
+# --- HELPER: Finalize Purchase (Shared Logic - Modified for Reseller Price) ---
 async def _finalize_purchase(user_id: int, basket_snapshot: list, discount_code_used: str | None, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """
     Shared logic to finalize a purchase after payment confirmation (balance or crypto).
-    Decrements stock, adds purchase record, sends details, cleans up product/media.
+    Decrements stock, adds purchase record (with potentially discounted price),
+    sends details, cleans up product/media.
     """
     chat_id = context._chat_id or context._user_id or user_id # Try to get chat_id
     if not chat_id:
          logger.error(f"Cannot determine chat_id for user {user_id} in _finalize_purchase")
-         # This is tricky, we might not be able to notify the user easily here.
-         # The purchase might still proceed in DB, but user won't get pickup details via bot.
-         # For now, log and proceed with DB operations. A fallback might be needed.
 
-    lang = context.user_data.get("lang", "en") # Get lang from context if available
+    lang = context.user_data.get("lang", "en")
     lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
     if not basket_snapshot: logger.error(f"Empty basket_snapshot for user {user_id} purchase finalization."); return False
 
@@ -618,19 +624,20 @@ async def _finalize_purchase(user_id: int, basket_snapshot: list, discount_code_
     purchases_to_insert = []
     final_pickup_details = defaultdict(list)
     db_update_successful = False
-    total_price_paid_decimal = Decimal('0.0')
+    total_price_paid_decimal = Decimal('0.0') # Track total actually paid after discounts
 
     try:
         conn = get_db_connection()
         c = conn.cursor()
         c.execute("BEGIN EXCLUSIVE")
 
-        # 1. Process items (Decrement available, check price, prepare purchase record)
+        # Get product IDs from snapshot
         product_ids_in_snapshot = list(set(item['product_id'] for item in basket_snapshot))
-        if not product_ids_in_snapshot: logger.warning(f"Empty snapshot IDs user {user_id} finalization."); conn.rollback(); return False
+        if not product_ids_in_snapshot:
+            logger.warning(f"Empty snapshot IDs user {user_id} finalization."); conn.rollback(); return False
 
         placeholders = ','.join('?' * len(product_ids_in_snapshot))
-        # Fetch details needed for processing and pickup info
+        # Fetch details needed for processing and pickup info (including original price)
         c.execute(f"SELECT id, name, product_type, size, price, city, district, original_text FROM products WHERE id IN ({placeholders})", product_ids_in_snapshot)
         product_db_details = {row['id']: dict(row) for row in c.fetchall()}
         purchase_time_iso = datetime.now(timezone.utc).isoformat()
@@ -638,27 +645,32 @@ async def _finalize_purchase(user_id: int, basket_snapshot: list, discount_code_
         for item_snapshot in basket_snapshot:
             product_id = item_snapshot['product_id']
             details = product_db_details.get(product_id)
-            # Note: We assume the item *must* exist because it was reserved.
-            # If it doesn't, something went wrong previously.
             if not details:
                 logger.error(f"CRITICAL: Reserved product {product_id} missing from DB during finalization user {user_id}. Skipping item.")
-                continue # Skip this item, but try to process others
-
-            # Decrement available count (already reserved, just need to remove from available)
-            # We trust the reservation system and don't check available > reserved here again.
-            avail_update = c.execute("UPDATE products SET available = available - 1 WHERE id = ? AND available > 0", (product_id,))
-            if avail_update.rowcount == 0:
-                # This *shouldn't* happen if reservation worked, but log if it does
-                logger.error(f"CRITICAL: Failed available decrement for reserved product P{product_id} user {user_id}. Race condition or logic error?")
-                # Don't rollback everything, just skip this item maybe? Or rollback?
-                # Let's skip for now, maybe partial purchase is better than none.
                 continue
 
-            item_price_decimal = Decimal(str(details['price']))
-            total_price_paid_decimal += item_price_decimal # Sum prices for logging/stats
-            item_price_float = float(item_price_decimal)
+            # Decrement available count
+            avail_update = c.execute("UPDATE products SET available = available - 1 WHERE id = ? AND available > 0", (product_id,))
+            if avail_update.rowcount == 0:
+                logger.error(f"CRITICAL: Failed available decrement for reserved product P{product_id} user {user_id}. Race condition or logic error?")
+                continue
 
-            purchases_to_insert.append((user_id, product_id, details['name'], details['product_type'], details['size'], item_price_float, details['city'], details['district'], purchase_time_iso))
+            # --- Calculate Price Paid (Original - Reseller Discount) ---
+            item_original_price_decimal = Decimal(str(details['price']))
+            item_product_type = details['product_type']
+            item_reseller_discount_percent = get_reseller_discount(user_id, item_product_type)
+            item_reseller_discount_amount = (item_original_price_decimal * item_reseller_discount_percent / Decimal('100')).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+            item_price_paid_decimal = item_original_price_decimal - item_reseller_discount_amount
+            # --- End Calculation ---
+
+            total_price_paid_decimal += item_price_paid_decimal # Sum ACTUAL price paid
+            item_price_paid_float = float(item_price_paid_decimal) # Convert to float for DB insert
+
+            # <<< Use item_price_paid_float for purchase record >>>
+            purchases_to_insert.append((
+                user_id, product_id, details['name'], item_product_type, details['size'],
+                item_price_paid_float, details['city'], details['district'], purchase_time_iso
+            ))
             processed_product_ids.append(product_id)
             final_pickup_details[product_id].append({'name': details['name'], 'size': details['size'], 'text': details.get('original_text')})
 
@@ -668,20 +680,20 @@ async def _finalize_purchase(user_id: int, basket_snapshot: list, discount_code_
             if chat_id: await send_message_with_retry(context.bot, chat_id, lang_data.get("error_processing_purchase_contact_support", "❌ Error processing purchase."), parse_mode=None)
             return False
 
-        # 2. Record Purchases & Update User Stats
+        # Record Purchases & Update User Stats
         c.executemany("INSERT INTO purchases (user_id, product_id, product_name, product_type, product_size, price_paid, city, district, purchase_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", purchases_to_insert)
         c.execute("UPDATE users SET total_purchases = total_purchases + ? WHERE user_id = ?", (len(purchases_to_insert), user_id))
 
-        # Increment discount code usage if applicable
+        # Increment general discount code usage if applicable
         if discount_code_used:
-            logger.info(f"Incrementing usage count for discount code '{discount_code_used}' used by {user_id}.")
+            logger.info(f"Incrementing usage count for general discount code '{discount_code_used}' used by {user_id}.")
             c.execute("UPDATE discount_codes SET uses_count = uses_count + 1 WHERE code = ?", (discount_code_used,))
 
         # Clear user's basket in DB
         c.execute("UPDATE users SET basket = '' WHERE user_id = ?", (user_id,))
         conn.commit()
         db_update_successful = True
-        logger.info(f"Finalized purchase DB update user {user_id}. Processed {len(purchases_to_insert)} items. Discount: {discount_code_used or 'None'}")
+        logger.info(f"Finalized purchase DB update user {user_id}. Processed {len(purchases_to_insert)} items. General Discount: {discount_code_used or 'None'}. Total Paid (after reseller disc): {total_price_paid_decimal:.2f} EUR")
 
     except sqlite3.Error as e:
         logger.error(f"DB error during purchase finalization user {user_id}: {e}", exc_info=True); db_update_successful = False
@@ -698,7 +710,7 @@ async def _finalize_purchase(user_id: int, basket_snapshot: list, discount_code_
         context.user_data['basket'] = []
         context.user_data.pop('applied_discount', None)
 
-        # Fetch Media (same as before)
+        # Fetch Media
         media_details = defaultdict(list)
         if processed_product_ids:
             conn_media = None
@@ -712,7 +724,7 @@ async def _finalize_purchase(user_id: int, basket_snapshot: list, discount_code_
             finally:
                 if conn_media: conn_media.close()
 
-        # Send Pickup Details (same as before)
+        # Send Pickup Details
         if chat_id: # Only attempt if we have a chat_id
             success_title = lang_data.get("purchase_success", "🎉 Purchase Complete! Pickup details below:")
             await send_message_with_retry(context.bot, chat_id, success_title, parse_mode=None)
@@ -720,16 +732,15 @@ async def _finalize_purchase(user_id: int, basket_snapshot: list, discount_code_
             for prod_id in processed_product_ids:
                 item_details_list = final_pickup_details.get(prod_id)
                 if not item_details_list: continue
-                item_details = item_details_list[0] # Assuming one entry per prod_id here
+                item_details = item_details_list[0]
                 item_name, item_size = item_details['name'], item_details['size']
                 item_text = item_details['text'] or "(No specific pickup details provided)"
-                product_type = product_db_details.get(prod_id, {}).get('product_type', 'Product') # Get type for emoji
+                product_type = product_db_details.get(prod_id, {}).get('product_type', 'Product')
                 product_emoji = PRODUCT_TYPES.get(product_type, DEFAULT_PRODUCT_EMOJI)
                 item_header = f"--- Item: {product_emoji} {item_name} {item_size} ---"
 
                 media_sent = False; caption_sent_with_media = False; opened_files = []
                 if prod_id in media_details:
-                    # ... (Keep the exact media sending logic from process_purchase_with_balance) ...
                      media_list = media_details[prod_id]
                      if media_list:
                         media_group_to_send = []
@@ -779,17 +790,17 @@ async def _finalize_purchase(user_id: int, basket_snapshot: list, discount_code_
                     text_to_send = item_text if media_sent else f"{item_header}\n\n{item_text}"
                     if not text_to_send: text_to_send = f"(No details for {item_name} {item_size})"
                     await send_message_with_retry(context.bot, chat_id, text_to_send, parse_mode=None)
-        # Delete Product Records and Media Directories Async (same as before)
+
+        # Delete Product Records and Media Directories Async
         conn_del = None
         try:
             conn_del = get_db_connection()
             c_del = conn_del.cursor()
-            # Use executemany for potentially better performance if many items
             ids_tuple_list = [(pid,) for pid in processed_product_ids]
             c_del.executemany("DELETE FROM product_media WHERE product_id = ?", ids_tuple_list)
             delete_result = c_del.executemany("DELETE FROM products WHERE id = ?", ids_tuple_list)
             conn_del.commit()
-            deleted_count = delete_result.rowcount # Note: executemany might return -1 or None depending on driver
+            deleted_count = delete_result.rowcount
             logger.info(f"Attempted deletion of {len(processed_product_ids)} purchased product records (Result: {deleted_count}).")
             for prod_id in processed_product_ids:
                  media_dir_to_delete = os.path.join(MEDIA_DIR, str(prod_id))
@@ -801,7 +812,7 @@ async def _finalize_purchase(user_id: int, basket_snapshot: list, discount_code_
         finally:
             if conn_del: conn_del.close()
 
-        # Final Message (same as before)
+        # Final Message
         if chat_id:
              final_message_parts = ["Purchase details sent above."]
              leave_review_button = lang_data.get("leave_review_button", "Leave a Review")
@@ -810,12 +821,12 @@ async def _finalize_purchase(user_id: int, basket_snapshot: list, discount_code_
 
         return True # Indicate success
     else: # Purchase failed at DB level
-        # Basket is likely inconsistent now, maybe clear it? Or try to revert?
-        # Safest is often to clear and inform user.
         context.user_data['basket'] = []
         context.user_data.pop('applied_discount', None)
         if chat_id: await send_message_with_retry(context.bot, chat_id, lang_data.get("error_processing_purchase_contact_support", "❌ Error processing purchase."), parse_mode=None)
         return False
+
+# --- END _finalize_purchase ---
 
 
 # --- Process Purchase with Balance (Uses Helper) ---
