@@ -44,7 +44,9 @@ from utils import (
     DEFAULT_WELCOME_MESSAGE, # Fallback if needed
     # User status helpers
     get_user_status, get_progress_bar,
-    _get_lang_data  # <<<===== IMPORT THE HELPER =====>>>
+    _get_lang_data,  # <<<===== IMPORT THE HELPER =====>>>
+    # <<< Admin Logging >>>
+    log_admin_action, ACTION_RESELLER_DISCOUNT_DELETE # Import logging helper and action constant
 )
 # --- Import viewer admin handlers ---
 # These now include the user management handlers
@@ -57,8 +59,8 @@ try:
         handle_viewer_view_product_media
     )
 except ImportError:
-    logger_dummy = logging.getLogger(__name__ + "_dummy_viewer")
-    logger_dummy.error("Could not import handlers from viewer_admin.py.")
+    logger_dummy_viewer = logging.getLogger(__name__ + "_dummy_viewer")
+    logger_dummy_viewer.error("Could not import handlers from viewer_admin.py.")
     # Define dummy handlers for viewer admin menu and user management if import fails
     async def handle_viewer_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
         query = update.callback_query
@@ -74,6 +76,43 @@ except ImportError:
     async def handle_viewer_added_products(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None): pass
     async def handle_viewer_view_product_media(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None): pass
 # ------------------------------------
+
+# --- Import Reseller Management Handlers ---
+try:
+    from reseller_management import (
+        handle_manage_resellers_menu,
+        handle_reseller_manage_id_message,
+        handle_reseller_toggle_status,
+        handle_manage_reseller_discounts_select_reseller,
+        handle_manage_specific_reseller_discounts,
+        handle_reseller_add_discount_select_type,
+        handle_reseller_add_discount_enter_percent,
+        handle_reseller_edit_discount,
+        handle_reseller_percent_message,
+        handle_reseller_delete_discount_confirm,
+    )
+except ImportError:
+    logger_dummy_reseller = logging.getLogger(__name__ + "_dummy_reseller")
+    logger_dummy_reseller.error("Could not import handlers from reseller_management.py.")
+    async def handle_manage_resellers_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+        query = update.callback_query; msg = "Reseller Status Mgmt handler not found."
+        if query: await query.edit_message_text(msg)
+        else: await send_message_with_retry(context.bot, update.effective_chat.id, msg)
+    async def handle_manage_reseller_discounts_select_reseller(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+        query = update.callback_query; msg = "Reseller Discount Mgmt handler not found."
+        if query: await query.edit_message_text(msg)
+        else: await send_message_with_retry(context.bot, update.effective_chat.id, msg)
+    # Add dummies for other reseller handlers if needed (less critical for basic menu)
+    async def handle_reseller_manage_id_message(update: Update, context: ContextTypes.DEFAULT_TYPE): pass
+    async def handle_reseller_toggle_status(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None): pass
+    async def handle_manage_specific_reseller_discounts(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None): pass
+    async def handle_reseller_add_discount_select_type(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None): pass
+    async def handle_reseller_add_discount_enter_percent(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None): pass
+    async def handle_reseller_edit_discount(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None): pass
+    async def handle_reseller_percent_message(update: Update, context: ContextTypes.DEFAULT_TYPE): pass
+    async def handle_reseller_delete_discount_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None): pass
+# ------------------------------------------
+
 
 # Import stock handler
 try: from stock import handle_view_stock
@@ -402,7 +441,9 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         [InlineKeyboardButton("➕ Add Products", callback_data="adm_city")],
         [InlineKeyboardButton("🗑️ Manage Products", callback_data="adm_manage_products")],
         [InlineKeyboardButton("👥 Manage Users", callback_data="adm_manage_users|0")],
-        [InlineKeyboardButton("🏷️ Manage Discounts", callback_data="adm_manage_discounts")],
+        [InlineKeyboardButton("👑 Manage Resellers", callback_data="manage_resellers_menu")], # <<< ADDED
+        [InlineKeyboardButton("🏷️ Manage Reseller Discounts", callback_data="manage_reseller_discounts_select_reseller|0")], # <<< ADDED
+        [InlineKeyboardButton("🏷️ Manage Discount Codes", callback_data="adm_manage_discounts")], # Kept General Discounts
         [InlineKeyboardButton("👋 Manage Welcome Msg", callback_data="adm_manage_welcome|0")], # Default to page 0
         [InlineKeyboardButton("📦 View Bot Stock", callback_data="view_stock")],
         [InlineKeyboardButton("🗺️ Manage Districts", callback_data="adm_manage_districts")],
@@ -739,7 +780,7 @@ async def handle_confirm_add_drop(update: Update, context: ContextTypes.DEFAULT_
     try:
         conn = get_db_connection(); c = conn.cursor(); c.execute("BEGIN")
         c.execute("""INSERT INTO products (city, district, product_type, size, name, price, available, reserved, original_text, added_by, added_date) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)""",
-                  (city, district, p_type, size, product_name, price, original_text, ADMIN_ID, datetime.now(timezone.utc).isoformat()))
+                  (city, district, p_type, size, price, original_text, ADMIN_ID, datetime.now(timezone.utc).isoformat()))
         product_id = c.lastrowid
         if product_id and media_list and temp_dir:
             final_media_dir = os.path.join(MEDIA_DIR, str(product_id)); await asyncio.to_thread(os.makedirs, final_media_dir, exist_ok=True); media_inserts = []
@@ -1284,11 +1325,22 @@ async def handle_adm_delete_type(update: Update, context: ContextTypes.DEFAULT_T
     try:
         conn = get_db_connection() # Use helper
         c = conn.cursor()
+        # Check products table
         c.execute("SELECT COUNT(*) FROM products WHERE product_type = ?", (type_name,))
         product_count = c.fetchone()[0]
-        if product_count > 0:
+        # <<< ADDED: Check reseller_discounts table >>>
+        c.execute("SELECT COUNT(*) FROM reseller_discounts WHERE product_type = ?", (type_name,))
+        reseller_discount_count = c.fetchone()[0]
+        # <<< END ADDED >>>
+
+        if product_count > 0 or reseller_discount_count > 0: # Check both counts
+            error_msg_parts = []
+            if product_count > 0: error_msg_parts.append(f"{product_count} product(s)")
+            if reseller_discount_count > 0: error_msg_parts.append(f"{reseller_discount_count} reseller discount rule(s)")
+            usage_details = " and ".join(error_msg_parts)
+
             keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="adm_manage_types")]]
-            await query.edit_message_text(f"⚠️ Cannot Delete Type\n\nType {type_name} is currently used by {product_count} product(s). Please delete or reassign those products first.",
+            await query.edit_message_text(f"⚠️ Cannot Delete Type\n\nType {type_name} is currently used by {usage_details}. Please delete or reassign those first.",
                                     reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
         else:
             context.user_data["confirm_action"] = f"delete_type|{type_name}"
@@ -1318,9 +1370,9 @@ async def handle_adm_manage_discounts(update: Update, context: ContextTypes.DEFA
             FROM discount_codes ORDER BY created_date DESC
         """)
         codes = c.fetchall()
-        msg = "🏷️ Manage Discount Codes\n\n"
+        msg = "🏷️ Manage General Discount Codes\n\n" # Clarified title
         keyboard = []
-        if not codes: msg += "No discount codes found."
+        if not codes: msg += "No general discount codes found."
         else:
             for code in codes: # Access by column name
                 status = "✅ Active" if code['is_active'] else "❌ Inactive"
@@ -1345,7 +1397,7 @@ async def handle_adm_manage_discounts(update: Update, context: ContextTypes.DEFA
                     InlineKeyboardButton(f"{delete_text}", callback_data=f"adm_delete_discount|{code['id']}")
                 ])
         keyboard.extend([
-            [InlineKeyboardButton("➕ Add New Discount Code", callback_data="adm_add_discount_start")],
+            [InlineKeyboardButton("➕ Add New General Discount", callback_data="adm_add_discount_start")],
             [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="admin_menu")]
         ])
         try:
@@ -1430,7 +1482,7 @@ async def handle_adm_add_discount_start(update: Update, context: ContextTypes.DE
         [InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_discounts")]
     ]
     await query.edit_message_text(
-        "🏷️ Add New Discount Code\n\nPlease reply with the code text you want to use (e.g., SUMMER20), or use the generated one below.\n"
+        "🏷️ Add New General Discount Code\n\nPlease reply with the code text you want to use (e.g., SUMMER20), or use the generated one below.\n"
         "Codes are case-sensitive.",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=None
@@ -1932,16 +1984,25 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
               if not action_params: raise ValueError("Missing type_name")
               type_name = action_params[0]
               c.execute("SELECT COUNT(*) FROM products WHERE product_type = ?", (type_name,))
-              count = c.fetchone()[0]
-              if count == 0:
+              product_count = c.fetchone()[0]
+              c.execute("SELECT COUNT(*) FROM reseller_discounts WHERE product_type = ?", (type_name,)) # <<< Check reseller discounts
+              reseller_discount_count = c.fetchone()[0]
+              if product_count == 0 and reseller_discount_count == 0: # <<< Check both
                   delete_type_result = c.execute("DELETE FROM product_types WHERE name = ?", (type_name,))
                   if delete_type_result.rowcount > 0:
                        conn.commit(); load_all_data()
                        success_msg = f"✅ Type '{type_name}' deleted!"
                        next_callback = "adm_manage_types"
                   else: conn.rollback(); success_msg = f"❌ Error: Type '{type_name}' not found."
-              else: conn.rollback(); success_msg = f"❌ Error: Cannot delete type '{type_name}' as it is used by {count} product(s)."
-        # --- Delete Discount Code Logic ---
+              else:
+                  conn.rollback();
+                  error_msg_parts = []
+                  if product_count > 0: error_msg_parts.append(f"{product_count} product(s)")
+                  if reseller_discount_count > 0: error_msg_parts.append(f"{reseller_discount_count} reseller discount rule(s)")
+                  usage_details = " and ".join(error_msg_parts)
+                  success_msg = f"❌ Error: Cannot delete type '{type_name}' as it is used by {usage_details}."
+                  next_callback = "adm_manage_types" # Still go back
+        # --- Delete General Discount Code Logic ---
         elif action_type == "delete_discount":
              if not action_params: raise ValueError("Missing discount_id")
              code_id = int(action_params[0])
@@ -1992,6 +2053,28 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
                  logger.error(f"Error resetting default welcome message: {reset_e}", exc_info=True)
                  success_msg = "❌ Error resetting default template."
                  next_callback = "adm_manage_welcome|0"
+        # <<< ADDED: Delete Reseller Discount Rule Logic >>>
+        elif action_type == "confirm_delete_reseller_discount":
+            if len(action_params) < 2: raise ValueError("Missing reseller_id or product_type")
+            try:
+                reseller_id = int(action_params[0])
+                product_type = action_params[1]
+                c.execute("SELECT discount_percentage FROM reseller_discounts WHERE reseller_user_id = ? AND product_type = ?", (reseller_id, product_type))
+                old_res = c.fetchone()
+                old_value = old_res['discount_percentage'] if old_res else None # For logging
+                delete_res_result = c.execute("DELETE FROM reseller_discounts WHERE reseller_user_id = ? AND product_type = ?", (reseller_id, product_type))
+                if delete_res_result.rowcount > 0:
+                    conn.commit()
+                    log_admin_action(admin_id, ACTION_RESELLER_DISCOUNT_DELETE, reseller_id, reason=f"Type: {product_type}", old_value=old_value)
+                    success_msg = f"✅ Reseller discount rule deleted for {product_type}."
+                    next_callback = f"reseller_manage_specific|{reseller_id}"
+                else:
+                    conn.rollback(); success_msg = f"❌ Error: Reseller discount rule for {product_type} not found."
+                    next_callback = f"reseller_manage_specific|{reseller_id}"
+            except (ValueError, IndexError) as param_err:
+                conn.rollback(); logger.error(f"Invalid params for delete reseller discount: {action_params} - {param_err}")
+                success_msg = "❌ Error processing request."; next_callback = "admin_menu"
+        # <<< END ADDED >>>
         else: # Unknown action type
             logger.error(f"Unknown confirmation action type: {action_type}")
             conn.rollback()
@@ -2290,7 +2373,7 @@ async def handle_adm_edit_welcome_desc(update: Update, context: ContextTypes.DEF
     context.user_data['editing_welcome_template_name'] = template_name # Ensure it's set
     context.user_data['editing_welcome_field'] = 'description' # Indicate we are editing description
 
-    prompt_template = lang_data.get("welcome_edit_description_prompt", "Editing description for '{name}'. Current: '{current_desc}'.\n\nEnter new description or send '-' to keep current.")
+    prompt_template = lang_data.get("welcome_edit_description_prompt", "Editing description for '{name}'. Current: '{current_desc}'.\n\nEnter new description or send '-' to skip.")
     prompt = prompt_template.format(name=template_name, current_desc=current_desc or "Not set")
 
     keyboard = [[InlineKeyboardButton("❌ Cancel Edit", callback_data=f"adm_edit_welcome|{template_name}|{offset}")]]
@@ -2399,9 +2482,9 @@ async def _show_welcome_preview(update: Update, context: ContextTypes.DEFAULT_TY
     preview_text_raw = "_(Formatting Error)_" # Fallback preview
 
     try:
-        # Format the preview text
+        # Format using the raw username and placeholders
         preview_text_raw = template_text.format(
-            username=dummy_username, # Use raw username here, will escape below
+            username=dummy_username,
             status=dummy_status,
             progress_bar=dummy_progress,
             balance_str=dummy_balance,
@@ -2509,6 +2592,8 @@ async def handle_confirm_save_welcome(update: Update, context: ContextTypes.DEFA
 
 
 # --- Admin Message Handlers (Used when state is set) ---
+# --- These handlers are primarily for the core admin flow ---
+# --- Reseller state message handlers are defined in reseller_management.py ---
 
 async def handle_adm_add_city_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles text reply when state is 'awaiting_new_city_name'."""
