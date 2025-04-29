@@ -377,21 +377,24 @@ async def handle_city_selection(update: Update, context: ContextTypes.DEFAULT_TY
 
                     if products_in_district:
                         # Add district header to message text (using Markdown for bold)
-                        # Use helpers.escape_markdown to be safe with district names
                         escaped_dist_name = helpers.escape_markdown(dist_name, version=2)
-                        message_text_parts.append(f"{EMOJI_DISTRICT} *{escaped_dist_name}*:\n")
-                        # Add product details to message text
+                        message_text_parts.append(f"{EMOJI_DISTRICT} *{escaped_dist_name}*:\n") # Keep newline after district name
+
+                        # Add product details to message text (one per line)
                         for prod in products_in_district:
                             prod_emoji = PRODUCT_TYPES.get(prod['product_type'], DEFAULT_PRODUCT_EMOJI)
                             price_str = format_currency(prod['price'])
-                            # Escape potentially problematic characters in type/size/price/count
                             escaped_type = helpers.escape_markdown(prod['product_type'], version=2)
                             escaped_size = helpers.escape_markdown(prod['size'], version=2)
                             escaped_price = helpers.escape_markdown(price_str, version=2)
                             escaped_qty = helpers.escape_markdown(str(prod['quantity']), version=2)
                             escaped_avail = helpers.escape_markdown(available_label_short, version=2)
-                            message_text_parts.append(f"  • {prod_emoji} {escaped_type} {escaped_size} \\({escaped_price}€\\) \\- {escaped_qty} {escaped_avail}\\n")
-                        message_text_parts.append("\n") # Add space after district info
+                            # Ensure each product line ends with a newline and has indentation
+                            message_text_parts.append(f"    • {prod_emoji} {escaped_type} {escaped_size} \\({escaped_price}€\\) \\- {escaped_qty} {escaped_avail}\\n") # Added indentation and confirmed newline
+
+                        # <<< ADDED Optional Newline for spacing >>>
+                        message_text_parts.append("\n")
+
                         # Add district to list for button creation
                         districts_with_products_info.append((d_id, dist_name))
                     # else: District has no products, do nothing (it's skipped)
@@ -414,8 +417,10 @@ async def handle_city_selection(update: Update, context: ContextTypes.DEFAULT_TY
             keyboard_nav = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_cities_button}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
             await query.edit_message_text(f"{EMOJI_CITY} {city_name}\n\n{no_products_in_districts_msg}", reply_markup=InlineKeyboardMarkup(keyboard_nav), parse_mode=None)
         else:
-            message_text_parts.append(f"\n{choose_district_prompt}") # Add prompt below details
+            # Add prompt below details ONLY if there are districts with products
+            message_text_parts.append(f"\n{choose_district_prompt}")
             final_message = "".join(message_text_parts)
+
             # Create buttons ONLY for districts with products
             for d_id, dist_name in districts_with_products_info:
                  keyboard.append([InlineKeyboardButton(f"{EMOJI_DISTRICT} {dist_name}", callback_data=f"dist|{city_id}|{d_id}")])
@@ -423,11 +428,9 @@ async def handle_city_selection(update: Update, context: ContextTypes.DEFAULT_TY
             keyboard.append([InlineKeyboardButton(f"{EMOJI_BACK} {back_cities_button}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")])
 
             # Check length and edit message
-            # Use Markdown V2 now for bold districts
             try:
                 if len(final_message) > 4000:
                     # Find a good place to truncate (e.g., before the last district's details)
-                    # This is a basic approach, might cut mid-district if one is very long
                     trunc_point = final_message.rfind(f"\n{EMOJI_DISTRICT}", 0, 3900)
                     if trunc_point != -1:
                         final_message = final_message[:trunc_point] + "\n\n\\[\\.\\.\\. Message truncated \\.\\.\\.\\]"
@@ -453,6 +456,7 @@ async def handle_city_selection(update: Update, context: ContextTypes.DEFAULT_TY
                          await query.answer("Error displaying districts.", show_alert=True)
                 else:
                     await query.answer() # Acknowledge if not modified
+# --- END handle_city_selection ---
 
 
 async def handle_district_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
@@ -1693,7 +1697,7 @@ async def handle_language_selection(update: Update, context: ContextTypes.DEFAUL
             finally:
                 if conn: conn.close()
         else:
-             invalid_lang_answer = current_lang_data.get("invalid_language_answer", "Invalid language.")
+             invalid_lang_answer = current_lang_data.get("invalid_language_answer", "Invalid language selected.")
              await query.answer(invalid_lang_answer, show_alert=True)
     else:
         await _display_language_menu(update, context, current_lang, current_lang_data)
