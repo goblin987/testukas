@@ -271,7 +271,7 @@ async def handle_manage_reseller_discounts_select_reseller(update: Update, conte
         await query.edit_message_text("❌ Error displaying list.")
 
 
-# --- Manage Specific Reseller Discounts (Keep handlers below as they are) ---
+# --- Manage Specific Reseller Discounts ---
 
 async def handle_manage_specific_reseller_discounts(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     """Displays current discounts for a specific reseller and allows adding/editing."""
@@ -471,8 +471,6 @@ async def handle_reseller_percent_message(update: Update, context: ContextTypes.
             result = c.execute(sql, params_sql)
 
             # Determine log action based on whether it was an insert or update
-            # Note: INSERT OR REPLACE doesn't easily tell us if it inserted or replaced.
-            # We rely on the 'old_value' fetched earlier if in edit mode.
             action_desc = "RESELLER_DISCOUNT_ADD"
             if mode == 'edit':
                 action_desc = "RESELLER_DISCOUNT_EDIT" if old_value is not None else "RESELLER_DISCOUNT_ADD" # Treat edit on non-existent as add
@@ -523,18 +521,23 @@ async def handle_reseller_delete_discount_confirm(update: Update, context: Conte
 
     # Fetch current value for log/confirmation message
     current_discount = "N/A"
+    current_discount_float = None # For logging
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
         c.execute("SELECT discount_percentage FROM reseller_discounts WHERE reseller_user_id = ? AND product_type = ?", (target_reseller_id, product_type))
         res = c.fetchone()
-        if res: current_discount = f"{Decimal(str(res['discount_percentage'])):.1f}%"
+        if res:
+            current_discount_float = res['discount_percentage']
+            current_discount = f"{Decimal(str(current_discount_float)):.1f}%"
     except Exception as e: logger.error(f"Error fetching discount for delete confirm: {e}")
     finally:
          if conn: conn.close()
 
-    context.user_data["confirm_action"] = f"confirm_delete_reseller_discount|{target_reseller_id}|{product_type}"
+    # Store old value in context for logging in confirm_yes
+    context.user_data["confirm_action"] = f"confirm_delete_reseller_discount|{target_reseller_id}|{product_type}|{current_discount_float}"
+
     msg = (f"⚠️ Confirm Deletion\n\n"
            f"Delete the discount rule for {emoji} {product_type} ({current_discount}) for user ID {target_reseller_id}?\n\n"
            f"🚨 This action is irreversible!")
