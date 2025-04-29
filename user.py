@@ -5,7 +5,7 @@ import asyncio
 import os # Import os for path joining
 from datetime import datetime, timezone
 from collections import defaultdict, Counter
-from decimal import Decimal # Use Decimal for financial calculations
+from decimal import Decimal, ROUND_DOWN # <<< Added ROUND_DOWN
 
 # --- Telegram Imports ---
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -29,6 +29,17 @@ from utils import (
 )
 import json # <<< Make sure json is imported
 import payment # <<< Make sure payment module is imported
+
+# --- Import Reseller Helper ---
+try:
+    from reseller_management import get_reseller_discount
+except ImportError:
+    logger_dummy_reseller = logging.getLogger(__name__ + "_dummy_reseller")
+    logger_dummy_reseller.error("Could not import get_reseller_discount from reseller_management.py. Reseller discounts will not work.")
+    # Define a dummy function that always returns zero discount
+    def get_reseller_discount(user_id: int, product_type: str) -> Decimal:
+        return Decimal('0.0')
+# -----------------------------
 
 
 # Logging setup
@@ -211,10 +222,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn = get_db_connection()
             c = conn.cursor()
             # Ensure user exists
+            # <<< MODIFIED: Include is_reseller default in insert/update >>>
             c.execute("""
-                INSERT INTO users (user_id, username, language) VALUES (?, ?, 'en')
+                INSERT INTO users (user_id, username, language, is_reseller) VALUES (?, ?, 'en', 0)
                 ON CONFLICT(user_id) DO UPDATE SET username=excluded.username
             """, (user_id, username))
+            # <<< END MODIFIED >>>
             # Get language
             c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
             result = c.fetchone()
@@ -479,8 +492,10 @@ async def handle_district_selection(update: Update, context: ContextTypes.DEFAUL
         if conn: conn.close()
 
 
+# <<< MODIFIED: Incorporate Reseller Discount Display >>>
 async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
+    user_id = query.from_user.id # <<< GET USER ID
     lang, lang_data = _get_lang_data(context)
     if not params or len(params) < 3: logger.warning("handle_type_selection missing params."); await query.answer("Error: City/District/Type missing.", show_alert=True); return
     city_id, dist_id, p_type = params
@@ -507,29 +522,50 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             keyboard = []
             available_label_short = lang_data.get("available_label_short", "Av")
+            # <<< Fetch reseller discount ONCE >>>
+            reseller_discount_percent = get_reseller_discount(user_id, p_type)
+            # <<< End Fetch >>>
+
             for row in products:
-                size, price, count = row['size'], Decimal(str(row['price'])), row['count_available']
-                price_str_formatted = format_currency(price)
-                price_str_callback = f"{price:.2f}"
-                button_text = f"{product_emoji} {size} ({price_str_formatted}€) - {available_label_short}: {count}"
-                callback_data = f"product|{city_id}|{dist_id}|{p_type}|{size}|{price_str_callback}"
+                size, original_price_decimal, count = row['size'], Decimal(str(row['price'])), row['count_available']
+                original_price_str = format_currency(original_price_decimal)
+                original_price_callback_str = f"{original_price_decimal:.2f}" # Use original price for callback
+
+                # <<< Apply Reseller Discount for Display >>>
+                discounted_price_str = original_price_str # Default to original
+                if reseller_discount_percent > Decimal('0.0'):
+                    discount_amount = (original_price_decimal * reseller_discount_percent / Decimal('100')).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+                    discounted_price_decimal = original_price_decimal - discount_amount
+                    discounted_price_str = format_currency(discounted_price_decimal)
+                    # Use simple plain text for original price notation
+                    button_text = f"{product_emoji} {size} ({discounted_price_str}€ / Orig: {original_price_str}€) - {available_label_short}: {count}"
+                else:
+                    # No discount, show original price only
+                    button_text = f"{product_emoji} {size} ({original_price_str}€) - {available_label_short}: {count}"
+                # <<< End Apply >>>
+
+                # Callback still uses original price
+                callback_data = f"product|{city_id}|{dist_id}|{p_type}|{size}|{original_price_callback_str}"
                 keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
 
             keyboard.append([InlineKeyboardButton(f"{EMOJI_BACK} {back_types_button}", callback_data=f"dist|{city_id}|{dist_id}"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")])
             await query.edit_message_text(f"{EMOJI_CITY} {city}\n{EMOJI_DISTRICT} {district}\n{product_emoji} {p_type}\n\n{available_options_prompt}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
     except sqlite3.Error as e: logger.error(f"DB error fetching products {city}/{district}/{p_type}: {e}", exc_info=True); await query.edit_message_text(f"❌ {error_loading_products}", parse_mode=None)
     except Exception as e: logger.error(f"Unexpected error in handle_type_selection: {e}", exc_info=True); await query.edit_message_text(f"❌ {error_unexpected}", parse_mode=None)
     finally:
         if conn: conn.close()
 
+# --- END OF handle_type_selection ---
 
 async def handle_product_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
+    user_id = query.from_user.id # <<< Get user_id
     lang, lang_data = _get_lang_data(context)
     if not params or len(params) < 5: logger.warning("handle_product_selection missing params."); await query.answer("Error: Incomplete product data.", show_alert=True); return
-    city_id, dist_id, p_type, size, price_str = params
+    city_id, dist_id, p_type, size, price_str = params # price_str is ORIGINAL price
 
-    try: price = Decimal(price_str)
+    try: original_price = Decimal(price_str)
     except ValueError: logger.warning(f"Invalid price format: {price_str}"); await query.edit_message_text("❌ Error: Invalid product data.", parse_mode=None); return
 
     city = CITIES.get(city_id); district = DISTRICTS.get(city_id, {}).get(dist_id)
@@ -550,18 +586,31 @@ async def handle_product_selection(update: Update, context: ContextTypes.DEFAULT
     try:
         conn = get_db_connection()
         c = conn.cursor()
-        c.execute("SELECT COUNT(*) as count FROM products WHERE city = ? AND district = ? AND product_type = ? AND size = ? AND price = ? AND available > reserved", (city, district, p_type, size, float(price)))
+        # Check availability using original price
+        c.execute("SELECT COUNT(*) as count FROM products WHERE city = ? AND district = ? AND product_type = ? AND size = ? AND price = ? AND available > reserved", (city, district, p_type, size, float(original_price)))
         available_count_result = c.fetchone(); available_count = available_count_result['count'] if available_count_result else 0
 
         if available_count <= 0:
             keyboard = [[InlineKeyboardButton(f"{EMOJI_BACK} {back_options_button}", callback_data=f"type|{city_id}|{dist_id}|{p_type}"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button}", callback_data="back_start")]]
             await query.edit_message_text(f"❌ {drop_unavailable_msg}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
         else:
-            price_formatted = format_currency(price)
+            original_price_formatted = format_currency(original_price)
+            # <<< Calculate reseller price for display >>>
+            reseller_discount_percent = get_reseller_discount(user_id, p_type)
+            display_price_str = original_price_formatted
+            if reseller_discount_percent > Decimal('0.0'):
+                discount_amount = (original_price * reseller_discount_percent / Decimal('100')).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+                discounted_price = original_price - discount_amount
+                display_price_str = f"{format_currency(discounted_price)} (Orig: {original_price_formatted}€)"
+            # <<< End calculate >>>
+
             msg = (f"{EMOJI_CITY} {city} | {EMOJI_DISTRICT} {district}\n"
                    f"{product_emoji} {p_type} - {size}\n"
-                   f"{EMOJI_PRICE} {price_label}: {price_formatted} EUR\n"
+                   # <<< Display calculated price string >>>
+                   f"{EMOJI_PRICE} {price_label}: {display_price_str} EUR\n"
                    f"{EMOJI_QUANTITY} {available_label_long}: {available_count}")
+
+            # Callback still uses original price
             add_callback = f"add|{city_id}|{dist_id}|{p_type}|{size}|{price_str}"
             back_callback = f"type|{city_id}|{dist_id}|{p_type}"
             keyboard = [
@@ -574,20 +623,20 @@ async def handle_product_selection(update: Update, context: ContextTypes.DEFAULT
     finally:
         if conn: conn.close()
 
-
+# <<< MODIFIED: Incorporate Reseller Discount Calculation & Display >>>
 async def handle_add_to_basket(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
+    user_id = query.from_user.id # <<< GET USER ID
     lang, lang_data = _get_lang_data(context)
     if not params or len(params) < 5: logger.warning("handle_add_to_basket missing params."); await query.answer("Error: Incomplete product data.", show_alert=True); return
-    city_id, dist_id, p_type, size, price_str = params
+    city_id, dist_id, p_type, size, price_str = params # price_str is ORIGINAL price
 
-    try: price = Decimal(price_str)
+    try: original_price = Decimal(price_str) # <<< Store original price
     except ValueError: logger.warning(f"Invalid price format add_to_basket: {price_str}"); await query.edit_message_text("❌ Error: Invalid product data.", parse_mode=None); return
 
     city = CITIES.get(city_id); district = DISTRICTS.get(city_id, {}).get(dist_id)
     if not city or not district: error_location_mismatch = lang_data.get("error_location_mismatch", "Error: Location data mismatch."); await query.edit_message_text(f"❌ {error_location_mismatch}", parse_mode=None); return await handle_shop(update, context)
 
-    user_id = query.from_user.id
     product_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
     theme_name = context.user_data.get("theme", "default"); theme = THEMES.get(theme_name, THEMES["default"])
     basket_emoji = theme.get('basket', EMOJI_BASKET)
@@ -602,12 +651,14 @@ async def handle_add_to_basket(update: Update, context: ContextTypes.DEFAULT_TYP
     added_msg_template = lang_data.get("added_to_basket", "✅ Item Reserved!\n\n{item} is in your basket for {timeout} minutes! ⏳")
     pay_msg_template = lang_data.get("pay", "💳 Total to Pay: {amount} EUR")
     apply_discount_button_text = lang_data.get("apply_discount_button", "Apply Discount Code")
+    reseller_discount_label = lang_data.get("reseller_discount_label", "Reseller Discount") # <<< NEW
 
     try:
         conn = get_db_connection()
         c = conn.cursor()
         c.execute("BEGIN EXCLUSIVE")
-        c.execute("SELECT id FROM products WHERE city = ? AND district = ? AND product_type = ? AND size = ? AND price = ? AND available > reserved ORDER BY id LIMIT 1", (city, district, p_type, size, float(price)))
+        # Query using original price
+        c.execute("SELECT id FROM products WHERE city = ? AND district = ? AND product_type = ? AND size = ? AND price = ? AND available > reserved ORDER BY id LIMIT 1", (city, district, p_type, size, float(original_price)))
         product_row = c.fetchone()
 
         if not product_row:
@@ -623,36 +674,77 @@ async def handle_add_to_basket(update: Update, context: ContextTypes.DEFAULT_TYP
         conn.commit()
 
         if "basket" not in context.user_data or not isinstance(context.user_data["basket"], list): context.user_data["basket"] = []
-        context.user_data["basket"].append({"product_id": product_id_reserved, "price": price, "timestamp": timestamp})
-        logger.info(f"User {user_id} added product {product_id_reserved} to basket.")
+        # <<< Store product_type along with original price >>>
+        context.user_data["basket"].append({
+            "product_id": product_id_reserved,
+            "price": original_price, # Store original price
+            "product_type": p_type, # Store product type
+            "timestamp": timestamp
+        })
+        # <<< End store >>>
+        logger.info(f"User {user_id} added product {product_id_reserved} (type: {p_type}) to basket.")
 
         timeout_minutes = BASKET_TIMEOUT // 60
         current_basket_list = context.user_data["basket"]
 
-        original_total = sum(item['price'] for item in current_basket_list)
-        final_total = original_total; discount_amount = Decimal('0.0')
+        # --- Calculate Totals with Reseller Discount ---
+        basket_original_total = Decimal('0.0')
+        total_reseller_discount_amount = Decimal('0.0')
+        total_after_reseller = Decimal('0.0')
+
+        for item in current_basket_list:
+            item_original_price = item['price']
+            item_type = item['product_type']
+            basket_original_total += item_original_price
+
+            item_reseller_discount_percent = get_reseller_discount(user_id, item_type)
+            item_reseller_discount = (item_original_price * item_reseller_discount_percent / Decimal('100')).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+            total_reseller_discount_amount += item_reseller_discount
+            total_after_reseller += (item_original_price - item_reseller_discount)
+        # --- End Calculate ---
+
+        # --- Apply General Discount (if any) ---
+        final_total = total_after_reseller # Start with reseller-discounted total
+        general_discount_amount = Decimal('0.0')
         applied_discount_info = context.user_data.get('applied_discount')
         pay_msg_str = ""
 
         if applied_discount_info:
-             code_valid, _, discount_details = validate_discount_code(applied_discount_info['code'], float(original_total))
+             # Validate general code against the total *after* reseller discount
+             code_valid, _, discount_details = validate_discount_code(applied_discount_info['code'], float(total_after_reseller))
              if code_valid and discount_details:
-                 discount_amount = Decimal(str(discount_details['discount_amount']))
-                 final_total = Decimal(str(discount_details['final_total']))
-                 context.user_data['applied_discount']['amount'] = float(discount_amount)
+                 general_discount_amount = Decimal(str(discount_details['discount_amount']))
+                 final_total = Decimal(str(discount_details['final_total'])) # validate_discount_code returns final total after THIS code
+                 # Update context with amounts based on the reseller-adjusted total
+                 context.user_data['applied_discount']['amount'] = float(general_discount_amount)
                  context.user_data['applied_discount']['final_total'] = float(final_total)
+             else:
+                 # General discount became invalid (maybe due to reseller discount changing total)
+                 context.user_data.pop('applied_discount', None)
+                 await query.answer("General discount removed (basket changed).", show_alert=False)
+        # --- End Apply General Discount ---
 
-        final_total_str = format_currency(final_total)
-        pay_msg_str = pay_msg_template.format(amount=final_total_str)
-        if discount_amount > 0:
-             original_total_str = format_currency(original_total)
-             discount_amount_str = format_currency(discount_amount)
-             pay_msg_str = f"~{original_total_str} EUR~ - {discount_amount_str} EUR Discount\n{pay_msg_str}"
 
-        item_price_str = format_currency(price)
+        # --- Build Message ---
+        item_price_str = format_currency(original_price)
         item_desc = f"{product_emoji} {p_type} {size} ({item_price_str}€)"
         expiry_dt = datetime.fromtimestamp(timestamp + BASKET_TIMEOUT); expiry_time_str = expiry_dt.strftime('%H:%M:%S')
-        reserved_msg = (added_msg_template.format(timeout=timeout_minutes, item=item_desc) + "\n\n" + f"⏳ {expires_label}: {expiry_time_str}\n\n" + f"{pay_msg_str}")
+        reserved_msg = (added_msg_template.format(timeout=timeout_minutes, item=item_desc) + "\n\n" + f"⏳ {expires_label}: {expiry_time_str}\n\n")
+
+        # Display breakdown
+        basket_original_total_str = format_currency(basket_original_total)
+        reserved_msg += f"{lang_data.get('subtotal_label', 'Subtotal')}: {basket_original_total_str} EUR\n"
+        if total_reseller_discount_amount > Decimal('0.0'):
+            reseller_discount_str = format_currency(total_reseller_discount_amount)
+            reserved_msg += f"{EMOJI_DISCOUNT} {reseller_discount_label}: -{reseller_discount_str} EUR\n"
+        if general_discount_amount > Decimal('0.0'):
+            general_discount_str = format_currency(general_discount_amount)
+            general_code = applied_discount_info.get('code', 'Discount')
+            reserved_msg += f"{EMOJI_DISCOUNT} {lang_data.get('discount_applied_label', 'Discount Applied')} ({general_code}): -{general_discount_str} EUR\n"
+
+        final_total_str = format_currency(final_total)
+        reserved_msg += pay_msg_template.format(amount=final_total_str) # Total to pay
+
         district_btn_text = district[:15]
 
         keyboard = [
@@ -674,6 +766,8 @@ async def handle_add_to_basket(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text(f"❌ {error_adding_unexpected}", parse_mode=None)
     finally:
         if conn: conn.close()
+
+# --- END handle_add_to_basket ---
 
 
 # --- Profile Handlers ---
@@ -720,8 +814,9 @@ async def handle_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, par
     finally:
         if conn: conn.close()
 
-# --- Discount Validation (Synchronous) ---
-def validate_discount_code(code_text: str, current_total_float: float) -> tuple[bool, str, dict | None]:
+# --- Discount Validation (Synchronous - Adjusted for base total) ---
+def validate_discount_code(code_text: str, base_total_float: float) -> tuple[bool, str, dict | None]:
+    """ Validates a general discount code against a base total (which should be after reseller discounts). """
     lang_data = LANGUAGES.get('en', {}) # Use English for internal messages
     no_code_msg = lang_data.get("no_code_provided", "No code provided.")
     not_found_msg = lang_data.get("discount_code_not_found", "Discount code not found.")
@@ -752,18 +847,22 @@ def validate_discount_code(code_text: str, current_total_float: float) -> tuple[
             except ValueError: logger.warning(f"Invalid expiry_date format DB code {code_data['code']}"); return False, invalid_expiry_msg, None
         if code_data['max_uses'] is not None and code_data['uses_count'] >= code_data['max_uses']: return False, limit_reached_msg, None
 
-        discount_amount = 0.0
+        discount_amount = Decimal('0.0')
         dtype = code_data['discount_type']; value = Decimal(str(code_data['value']))
-        current_total_decimal = Decimal(str(current_total_float))
+        base_total_decimal = Decimal(str(base_total_float)) # Use the passed base total
 
-        if dtype == 'percentage': discount_amount = (current_total_decimal * value) / Decimal('100.0')
+        if dtype == 'percentage': discount_amount = (base_total_decimal * value) / Decimal('100.0')
         elif dtype == 'fixed': discount_amount = value
         else: logger.error(f"Unknown discount type '{dtype}' code {code_data['code']}"); return False, internal_error_type_msg, None
 
-        discount_amount = min(discount_amount, current_total_decimal)
-        final_total_decimal = max(Decimal('0.0'), current_total_decimal - discount_amount)
-        discount_amount_float = round(float(discount_amount), 2)
-        final_total_float = round(float(final_total_decimal), 2)
+        # Ensure discount doesn't exceed the (potentially already reseller-discounted) base total
+        discount_amount = min(discount_amount, base_total_decimal).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+        final_total_decimal = (base_total_decimal - discount_amount).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+        # Ensure final total is not negative
+        final_total_decimal = max(Decimal('0.0'), final_total_decimal)
+
+        discount_amount_float = float(discount_amount)
+        final_total_float = float(final_total_decimal)
 
         details = {'code': code_data['code'], 'type': dtype, 'value': float(value), 'discount_amount': discount_amount_float, 'final_total': final_total_float}
         code_display = code_data['code']; value_str_display = format_discount_value(dtype, float(value))
@@ -776,17 +875,18 @@ def validate_discount_code(code_text: str, current_total_float: float) -> tuple[
     finally:
         if conn: conn.close()
 
+# --- END Discount Validation ---
+
 # --- Basket Handlers ---
+# <<< MODIFIED: Incorporate Reseller Discount Calculation & Display >>>
 async def handle_view_basket(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
     user_id = query.from_user.id
     lang, lang_data = _get_lang_data(context)
     theme_name = context.user_data.get("theme", "default"); theme = THEMES.get(theme_name, THEMES["default"]); basket_emoji = theme.get('basket', EMOJI_BASKET)
 
-    clear_expired_basket(context, user_id)
-    basket = context.user_data.get("basket", [])
-    applied_discount_info = context.user_data.get('applied_discount')
-    discount_code_to_revalidate = applied_discount_info.get('code') if applied_discount_info else None
+    clear_expired_basket(context, user_id) # Sync call to ensure basket context is up-to-date
+    basket = context.user_data.get("basket", []) # Basket items now include product_type
 
     if not basket:
         context.user_data.pop('applied_discount', None)
@@ -802,91 +902,170 @@ async def handle_view_basket(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return
 
     msg = f"{basket_emoji} {lang_data.get('your_basket_title', 'Your Basket')}\n\n"
-    original_total = Decimal('0.0')
-    keyboard_items = []; product_db_details = {}; conn = None
+    keyboard_items = []
+    product_db_details = {} # Fetch details if needed (though most should be in context now)
+    conn = None
 
+    # --- Calculate Totals with Reseller Discount First ---
+    basket_original_total = Decimal('0.0')
+    total_reseller_discount_amount = Decimal('0.0')
+    total_after_reseller = Decimal('0.0')
+    basket_items_with_details = [] # Store items with calculated discounts for display
+
+    # Fetch any missing product details (e.g., name, size if not fully stored in context)
+    # Although clear_expired_basket should have populated product_type
+    product_ids_in_basket = list(set(item.get('product_id') for item in basket if item.get('product_id')))
+    if product_ids_in_basket:
+        try:
+            conn = get_db_connection()
+            c = conn.cursor()
+            placeholders = ','.join('?' for _ in product_ids_in_basket)
+            c.execute(f"SELECT id, name, size FROM products WHERE id IN ({placeholders})", product_ids_in_basket)
+            product_db_details = {row['id']: {'name': row['name'], 'size': row['size']} for row in c.fetchall()}
+        except sqlite3.Error as e:
+            logger.error(f"DB error fetching product names/sizes for basket view user {user_id}: {e}")
+            # Continue without names/sizes if DB fails, but log error
+        finally:
+            if conn: conn.close(); conn = None # Close connection
+
+    items_to_process_count = 0
+    for item in basket:
+        prod_id = item.get('product_id')
+        original_price = item.get('price') # Should be Decimal from add_to_basket
+        product_type = item.get('product_type') # Should be stored now
+        timestamp = item.get('timestamp')
+
+        # Skip if essential data is missing (shouldn't happen often)
+        if prod_id is None or original_price is None or product_type is None or timestamp is None:
+            logger.warning(f"Skipping malformed item in basket context user {user_id}: {item}")
+            continue
+
+        items_to_process_count += 1
+        basket_original_total += original_price
+
+        # Calculate reseller discount for this item
+        item_reseller_discount_percent = get_reseller_discount(user_id, product_type)
+        item_reseller_discount = (original_price * item_reseller_discount_percent / Decimal('100')).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+        item_price_after_reseller = original_price - item_reseller_discount
+        total_reseller_discount_amount += item_reseller_discount
+        total_after_reseller += item_price_after_reseller
+
+        # Store details for display loop
+        db_info = product_db_details.get(prod_id, {})
+        basket_items_with_details.append({
+            'id': prod_id,
+            'type': product_type,
+            'name': db_info.get('name', f'P{prod_id}'),
+            'size': db_info.get('size', '?'),
+            'original_price': original_price,
+            'discounted_price': item_price_after_reseller, # Price after reseller discount
+            'timestamp': timestamp,
+            'has_reseller_discount': item_reseller_discount > Decimal('0.0')
+        })
+
+    if items_to_process_count == 0: # If all items were malformed
+        context.user_data['basket'] = []
+        context.user_data.pop('applied_discount', None);
+        basket_empty_msg = lang_data.get("basket_empty", "🛒 Your Basket is Empty!"); items_expired_note = lang_data.get("items_expired_note", "Items may have expired or were removed.")
+        shop_button_text = lang_data.get("shop_button", "Shop"); home_button_text = lang_data.get("home_button", "Home")
+        full_empty_msg = basket_empty_msg + "\n\n" + items_expired_note
+        keyboard = [[InlineKeyboardButton(f"🛍️ {shop_button_text}", callback_data="shop"), InlineKeyboardButton(f"🏠 {home_button_text}", callback_data="back_start")]]; await query.edit_message_text(full_empty_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None); return
+
+
+    # --- Re-validate General Discount ---
+    final_total = total_after_reseller # Start with reseller-discounted total
+    general_discount_amount = Decimal('0.0')
+    applied_discount_info = context.user_data.get('applied_discount')
+    discount_code_to_revalidate = applied_discount_info.get('code') if applied_discount_info else None
+    discount_applied_str = ""
+    discount_removed_note_template = lang_data.get("discount_removed_note", "Discount code {code} removed: {reason}")
+
+    if discount_code_to_revalidate:
+        # Validate against the total *after* reseller discounts
+        code_valid, validation_message, discount_details = validate_discount_code(discount_code_to_revalidate, float(total_after_reseller))
+        if code_valid and discount_details:
+            general_discount_amount = Decimal(str(discount_details['discount_amount']))
+            final_total = Decimal(str(discount_details['final_total'])) # This is final after both discounts
+            discount_code = discount_code_to_revalidate
+            discount_value_str = format_discount_value(discount_details['type'], discount_details['value']) # Format the general code value
+            discount_amount_str = format_currency(general_discount_amount)
+            discount_applied_str = (f"\n{EMOJI_DISCOUNT} {lang_data.get('discount_applied_label', 'Discount Applied')} ({discount_code}: {discount_value_str}): -{discount_amount_str} EUR")
+            # Update context if validation passed
+            context.user_data['applied_discount'] = {'code': discount_code_to_revalidate, 'amount': float(general_discount_amount), 'final_total': float(final_total)}
+        else:
+            # General discount code became invalid
+            context.user_data.pop('applied_discount', None)
+            logger.info(f"General Discount '{discount_code_to_revalidate}' invalidated for user {user_id} in basket view. Reason: {validation_message}")
+            discount_applied_str = f"\n{discount_removed_note_template.format(code=discount_code_to_revalidate, reason=validation_message)}"
+            await query.answer("Applied discount code removed (basket changed).", show_alert=False)
+
+
+    # --- Build Display Message ---
+    expires_in_label = lang_data.get("expires_in_label", "Expires in"); remove_button_label = lang_data.get("remove_button_label", "Remove")
+    current_time = time.time()
+
+    for index, item_detail in enumerate(basket_items_with_details):
+        prod_id = item_detail['id']
+        product_emoji = PRODUCT_TYPES.get(item_detail['type'], DEFAULT_PRODUCT_EMOJI)
+        item_desc_base = f"{product_emoji} {item_detail['name']} {item_detail['size']}"
+
+        # Format price display
+        price_display = format_currency(item_detail['discounted_price'])
+        if item_detail['has_reseller_discount']:
+            original_price_formatted = format_currency(item_detail['original_price'])
+            # Use Markdown V2 for strike-through if desired, otherwise plain text
+            # price_display += f" \\(~~{helpers.escape_markdown(original_price_formatted, version=2)}€~~\\)" # MDv2
+            price_display += f" (Orig: {original_price_formatted}€)" # Plain text
+
+        timestamp = item_detail['timestamp']
+        remaining_time = max(0, int(BASKET_TIMEOUT - (current_time - timestamp)))
+        time_str = f"{remaining_time // 60} min {remaining_time % 60} sec"
+
+        msg += (f"{index + 1}. {item_desc_base} ({price_display})\n" # Use calculated price_display
+                f"   ⏳ {expires_in_label}: {time_str}\n")
+
+        remove_button_text = f"🗑️ {remove_button_label} {item_desc_base}"[:60] # Truncate for safety
+        keyboard_items.append([InlineKeyboardButton(remove_button_text, callback_data=f"remove|{prod_id}")])
+
+    # --- Add Totals to Message ---
+    subtotal_label = lang_data.get("subtotal_label", "Subtotal"); total_label = lang_data.get("total_label", "Total")
+    basket_original_total_str = format_currency(basket_original_total)
+    final_total_str = format_currency(final_total)
+
+    msg += f"\n{subtotal_label}: {basket_original_total_str} EUR"
+    # Show reseller discount if applied
+    if total_reseller_discount_amount > Decimal('0.0'):
+        reseller_discount_str = format_currency(total_reseller_discount_amount)
+        msg += f"\n{EMOJI_DISCOUNT} {reseller_discount_label}: -{reseller_discount_str} EUR"
+    # Show general discount if applied (or note if removed)
+    msg += discount_applied_str # Contains formatted string or removal note
+    msg += f"\n💳 **{total_label}: {final_total_str} EUR**" # Use plain bolding
+
+    # --- Build Keyboard ---
+    pay_now_button_text = lang_data.get("pay_now_button", "Pay Now"); clear_all_button_text = lang_data.get("clear_all_button", "Clear All")
+    remove_discount_button_text = lang_data.get("remove_discount_button", "Remove Discount"); apply_discount_button_text = lang_data.get("apply_discount_button", "Apply Discount Code")
+    shop_more_button_text = lang_data.get("shop_more_button", "Shop More"); home_button_text = lang_data.get("home_button", "Home")
+
+    action_buttons = [
+        [InlineKeyboardButton(f"💳 {pay_now_button_text}", callback_data="confirm_pay"), InlineKeyboardButton(f"{basket_emoji} {clear_all_button_text}", callback_data="clear_basket")],
+        *([[InlineKeyboardButton(f"❌ {remove_discount_button_text}", callback_data="remove_discount")]] if context.user_data.get('applied_discount') else []), # Show remove only if general discount is applied
+        [InlineKeyboardButton(f"{EMOJI_DISCOUNT} {apply_discount_button_text}", callback_data="apply_discount_start")],
+        [InlineKeyboardButton(f"{EMOJI_SHOP} {shop_more_button_text}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button_text}", callback_data="back_start")]
+    ]
+    final_keyboard = keyboard_items + action_buttons
+
+    # --- Send/Edit Message ---
     try:
-        product_ids_in_basket = list(set(item['product_id'] for item in basket))
-        if product_ids_in_basket:
-             conn = get_db_connection()
-             c = conn.cursor()
-             placeholders = ','.join('?' for _ in product_ids_in_basket)
-             c.execute(f"SELECT id, name, price, size, product_type FROM products WHERE id IN ({placeholders})", product_ids_in_basket)
-             product_db_details = {row['id']: dict(row) for row in c.fetchall()}
+        # Use parse_mode=None as we handle bolding manually or avoid complex Markdown
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(final_keyboard), parse_mode=None)
+    except telegram_error.BadRequest as e:
+         if "message is not modified" not in str(e).lower(): logger.error(f"Error editing basket view message: {e}")
+         else: await query.answer()
+    except Exception as e:
+         logger.error(f"Unexpected error viewing basket user {user_id}: {e}", exc_info=True); await query.edit_message_text("❌ Error: Unexpected issue.", parse_mode=None)
 
-        items_to_display_count = 0
-        expires_in_label = lang_data.get("expires_in_label", "Expires in"); remove_button_label = lang_data.get("remove_button_label", "Remove")
+# --- END handle_view_basket ---
 
-        for index, item in enumerate(basket):
-            prod_id = item['product_id']; details = product_db_details.get(prod_id)
-            if not details: logger.warning(f"P{prod_id} missing DB details for view."); continue
-
-            if 'price' in item and isinstance(item['price'], Decimal): price = item['price']
-            else: price = Decimal(str(details['price']))
-
-            timestamp = item['timestamp']
-            product_type_name = details['product_type']
-            product_emoji = PRODUCT_TYPES.get(product_type_name, DEFAULT_PRODUCT_EMOJI)
-            item_desc = f"{product_emoji} {product_type_name} {details['size']}"
-            item_price = format_currency(price)
-            remaining_time = max(0, int(BASKET_TIMEOUT - (time.time() - timestamp)))
-            time_str = f"{remaining_time // 60} min {remaining_time % 60} sec"
-            msg += (f"{items_to_display_count + 1}. {item_desc} ({item_price}€)\n" f"   ⏳ {expires_in_label}: {time_str}\n")
-            remove_button_text = f"🗑️ {remove_button_label} {item_desc}"[:60] # Truncate for safety
-            keyboard_items.append([InlineKeyboardButton(remove_button_text, callback_data=f"remove|{prod_id}")])
-            original_total += price
-            items_to_display_count += 1
-
-        if items_to_display_count == 0:
-             context.user_data.pop('applied_discount', None); context.user_data['basket'] = []
-             basket_empty_msg = lang_data.get("basket_empty", "🛒 Your Basket is Empty!"); items_expired_note = lang_data.get("items_expired_note", "Items may have expired or were removed.")
-             shop_button_text = lang_data.get("shop_button", "Shop"); home_button_text = lang_data.get("home_button", "Home")
-             full_empty_msg = basket_empty_msg + "\n\n" + items_expired_note
-             keyboard = [[InlineKeyboardButton(f"🛍️ {shop_button_text}", callback_data="shop"), InlineKeyboardButton(f"🏠 {home_button_text}", callback_data="back_start")]]; await query.edit_message_text(full_empty_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None); return
-
-        discount_amount = Decimal('0.0'); final_total = original_total; discount_applied_str = ""
-        discount_applied_label = lang_data.get("discount_applied_label", "Discount Applied"); discount_removed_note_template = lang_data.get("discount_removed_note", "Discount code {code} removed: {reason}")
-
-        if discount_code_to_revalidate:
-            code_valid, validation_message, discount_details = validate_discount_code(discount_code_to_revalidate, float(original_total))
-            if code_valid and discount_details:
-                discount_amount = Decimal(str(discount_details['discount_amount']))
-                final_total = Decimal(str(discount_details['final_total']))
-                discount_code = discount_code_to_revalidate; discount_value = format_discount_value(discount_details['type'], discount_details['value'])
-                discount_amount_str = format_currency(discount_amount)
-                discount_applied_str = (f"\n{EMOJI_DISCOUNT} {discount_applied_label} ({discount_code}: {discount_value}): -{discount_amount_str} EUR")
-                context.user_data['applied_discount'] = {'code': discount_code_to_revalidate, 'amount': float(discount_amount), 'final_total': float(final_total)}
-            else:
-                context.user_data.pop('applied_discount', None); logger.info(f"Discount '{discount_code_to_revalidate}' invalid user {user_id}. Reason: {validation_message}")
-                discount_applied_str = f"\n{discount_removed_note_template.format(code=discount_code_to_revalidate, reason=validation_message)}"
-
-        subtotal_label = lang_data.get("subtotal_label", "Subtotal"); total_label = lang_data.get("total_label", "Total")
-        original_total_str = format_currency(original_total); final_total_str = format_currency(final_total)
-        msg += f"\n{subtotal_label}: {original_total_str} EUR"
-        msg += discount_applied_str if discount_applied_str else ""
-        msg += f"\n💳 {total_label}: {final_total_str} EUR"
-
-        pay_now_button_text = lang_data.get("pay_now_button", "Pay Now"); clear_all_button_text = lang_data.get("clear_all_button", "Clear All")
-        remove_discount_button_text = lang_data.get("remove_discount_button", "Remove Discount"); apply_discount_button_text = lang_data.get("apply_discount_button", "Apply Discount Code")
-        shop_more_button_text = lang_data.get("shop_more_button", "Shop More"); home_button_text = lang_data.get("home_button", "Home")
-
-        action_buttons = [
-            [InlineKeyboardButton(f"💳 {pay_now_button_text}", callback_data="confirm_pay"), InlineKeyboardButton(f"{basket_emoji} {clear_all_button_text}", callback_data="clear_basket")],
-            *([[InlineKeyboardButton(f"❌ {remove_discount_button_text}", callback_data="remove_discount")]] if context.user_data.get('applied_discount') else []),
-            [InlineKeyboardButton(f"{EMOJI_DISCOUNT} {apply_discount_button_text}", callback_data="apply_discount_start")],
-            [InlineKeyboardButton(f"{EMOJI_SHOP} {shop_more_button_text}", callback_data="shop"), InlineKeyboardButton(f"{EMOJI_HOME} {home_button_text}", callback_data="back_start")]
-        ]
-        final_keyboard = keyboard_items + action_buttons
-
-        try: await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(final_keyboard), parse_mode=None)
-        except telegram_error.BadRequest as e:
-             if "message is not modified" not in str(e).lower(): logger.error(f"Error editing basket view message: {e}")
-             else: await query.answer()
-
-    except sqlite3.Error as e: logger.error(f"DB error viewing basket user {user_id}: {e}", exc_info=True); await query.edit_message_text("❌ Error: Failed to Load Basket.", parse_mode=None)
-    except Exception as e: logger.error(f"Unexpected error viewing basket user {user_id}: {e}", exc_info=True); await query.edit_message_text("❌ Error: Unexpected issue.", parse_mode=None)
-    finally:
-         if conn: conn.close()
 
 # --- Discount Application Handlers ---
 async def apply_discount_start(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
@@ -906,19 +1085,22 @@ async def apply_discount_start(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer(lang_data.get("enter_code_answer", "Enter code in chat."))
 
 async def remove_discount(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Removes a *general* discount code."""
     query = update.callback_query
     user_id = query.from_user.id
     lang, lang_data = _get_lang_data(context)
 
     if 'applied_discount' in context.user_data:
         removed_code = context.user_data.pop('applied_discount')['code']
-        logger.info(f"User {user_id} removed discount code '{removed_code}'.")
+        logger.info(f"User {user_id} removed general discount code '{removed_code}'.")
         discount_removed_answer = lang_data.get("discount_removed_answer", "Discount removed.")
         await query.answer(discount_removed_answer)
     else: no_discount_answer = lang_data.get("no_discount_answer", "No discount applied."); await query.answer(no_discount_answer, show_alert=False)
-    await handle_view_basket(update, context)
+    await handle_view_basket(update, context) # Refresh basket view
 
+# <<< MODIFIED: Calculate base total AFTER reseller discounts >>>
 async def handle_user_discount_code_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles user entering a general discount code."""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     state = context.user_data.get("state")
@@ -935,37 +1117,39 @@ async def handle_user_discount_code_message(update: Update, context: ContextType
 
     clear_expired_basket(context, user_id)
     basket = context.user_data.get("basket", [])
-    original_total_decimal = Decimal('0.0'); conn = None
+    total_after_reseller_decimal = Decimal('0.0') # <<< Base total for validation
+
     if basket:
          try:
-            product_ids_in_basket = list(set(item['product_id'] for item in basket))
-            conn = get_db_connection()
-            c = conn.cursor()
-            placeholders = ','.join('?' for _ in product_ids_in_basket)
-            c.execute(f"SELECT id, price FROM products WHERE id IN ({placeholders})", product_ids_in_basket)
-            prices_dict = {row['id']: Decimal(str(row['price'])) for row in c.fetchall()}
-            original_total_decimal = sum(prices_dict.get(item['product_id'], Decimal('0.0')) for item in basket if item['product_id'] in prices_dict)
-         except sqlite3.Error as e: logger.error(f"DB error recalculating total user {user_id}: {e}"); error_calc_total = lang_data.get("error_calculating_total", "Error calculating total."); await send_message_with_retry(context.bot, chat_id, f"❌ {error_calc_total}", parse_mode=None); kb = [[InlineKeyboardButton(view_basket_button_text, callback_data="view_basket")]]; await send_message_with_retry(context.bot, chat_id, returning_to_basket_msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=None); return
-         finally:
-              if conn: conn.close()
+            # Calculate total AFTER reseller discounts
+            for item in basket:
+                original_price = item.get('price', Decimal('0.0'))
+                product_type = item.get('product_type', '')
+                reseller_discount_percent = get_reseller_discount(user_id, product_type)
+                item_reseller_discount = (original_price * reseller_discount_percent / Decimal('100')).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+                total_after_reseller_decimal += (original_price - item_reseller_discount)
+         except Exception as e: # Catch potential Decimal or other errors
+             logger.error(f"Error recalculating reseller-adjusted total user {user_id}: {e}"); error_calc_total = lang_data.get("error_calculating_total", "Error calculating total."); await send_message_with_retry(context.bot, chat_id, f"❌ {error_calc_total}", parse_mode=None); kb = [[InlineKeyboardButton(view_basket_button_text, callback_data="view_basket")]]; await send_message_with_retry(context.bot, chat_id, returning_to_basket_msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=None); return
     else:
         basket_empty_no_discount = lang_data.get("basket_empty_no_discount", "Basket empty. Cannot apply code."); await send_message_with_retry(context.bot, chat_id, basket_empty_no_discount, parse_mode=None); kb = [[InlineKeyboardButton(view_basket_button_text, callback_data="view_basket")]]; await send_message_with_retry(context.bot, chat_id, returning_to_basket_msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=None); return
 
-    # Validation message is English
-    code_valid, validation_message, discount_details = validate_discount_code(entered_code, float(original_total_decimal))
+    # <<< Validate against the total AFTER reseller discounts >>>
+    code_valid, validation_message, discount_details = validate_discount_code(entered_code, float(total_after_reseller_decimal))
 
     if code_valid and discount_details:
         context.user_data['applied_discount'] = {'code': entered_code, 'amount': discount_details['discount_amount'], 'final_total': discount_details['final_total']}
-        logger.info(f"User {user_id} applied discount code '{entered_code}'.")
+        logger.info(f"User {user_id} applied general discount code '{entered_code}'.")
         success_label = lang_data.get("success_label", "Success!")
         feedback_msg = f"✅ {success_label} {validation_message}"
     else:
-        context.user_data.pop('applied_discount', None)
-        logger.warning(f"User {user_id} failed to apply code '{entered_code}': {validation_message}")
+        context.user_data.pop('applied_discount', None) # Ensure no invalid code is stored
+        logger.warning(f"User {user_id} failed to apply general code '{entered_code}': {validation_message}")
         feedback_msg = f"❌ {validation_message}"
 
     keyboard = [[InlineKeyboardButton(view_basket_button_text, callback_data="view_basket")]]
     await send_message_with_retry(context.bot, chat_id, feedback_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+# --- END handle_user_discount_code_message ---
 
 
 # --- Remove From Basket ---
@@ -983,6 +1167,7 @@ async def handle_remove_from_basket(update: Update, context: ContextTypes.DEFAUL
     current_basket_context = context.user_data.get("basket", []); new_basket_context = []
     found_item_index = -1
 
+    # Find item in context basket
     for index, item in enumerate(current_basket_context):
         if item.get('product_id') == product_id_to_remove:
             found_item_index = index
@@ -994,18 +1179,21 @@ async def handle_remove_from_basket(update: Update, context: ContextTypes.DEFAUL
         item_removed_from_context = True
         new_basket_context = current_basket_context[:found_item_index] + current_basket_context[found_item_index+1:]
         logger.debug(f"Found item {product_id_to_remove} in context user {user_id}. DB String: {item_to_remove_str}")
-    else: logger.warning(f"Product {product_id_to_remove} not in user_data basket user {user_id}."); new_basket_context = list(current_basket_context)
+    else: logger.warning(f"Product {product_id_to_remove} not in user_data basket user {user_id}."); new_basket_context = list(current_basket_context) # Keep basket as is if not found
 
+    # Update DB (decrement reservation, update user basket string)
     try:
         conn = get_db_connection()
         c = conn.cursor(); c.execute("BEGIN")
+        # Only decrement reservation if item was actually found in context
         if item_removed_from_context:
              update_result = c.execute("UPDATE products SET reserved = MAX(0, reserved - 1) WHERE id = ?", (product_id_to_remove,))
              if update_result.rowcount > 0: logger.debug(f"Decremented reservation P{product_id_to_remove}.")
-             else: logger.warning(f"Could not find P{product_id_to_remove} to decrement reservation.")
+             else: logger.warning(f"Could not find P{product_id_to_remove} to decrement reservation (maybe already cleared?).")
+        # Update user's DB basket string
         c.execute("SELECT basket FROM users WHERE user_id = ?", (user_id,))
         db_basket_result = c.fetchone(); db_basket_str = db_basket_result['basket'] if db_basket_result else ''
-        if db_basket_str and item_to_remove_str:
+        if db_basket_str and item_to_remove_str: # Only modify DB string if we have the exact item:timestamp
             items_list = db_basket_str.split(',')
             if item_to_remove_str in items_list:
                 items_list.remove(item_to_remove_str); new_db_basket_str = ','.join(items_list)
@@ -1016,16 +1204,31 @@ async def handle_remove_from_basket(update: Update, context: ContextTypes.DEFAUL
         conn.commit()
         logger.info(f"DB ops complete remove P{product_id_to_remove} user {user_id}.")
 
+        # Update context basket
         context.user_data['basket'] = new_basket_context
-        if not context.user_data['basket']: context.user_data.pop('applied_discount', None)
+
+        # --- Re-validate General Discount after removal ---
+        if not context.user_data['basket']:
+            context.user_data.pop('applied_discount', None) # Clear discount if basket empty
         elif context.user_data.get('applied_discount'):
-             applied_discount_info = context.user_data['applied_discount']
-             basket_total_after_removal = float(sum(item.get('price', Decimal('0.0')) for item in context.user_data['basket']))
-             code_valid, _, _ = validate_discount_code(applied_discount_info['code'], basket_total_after_removal)
-             if not code_valid:
-                 reason_removed = lang_data.get("discount_removed_invalid_basket", "Discount removed (basket changed).")
-                 context.user_data.pop('applied_discount', None);
-                 await query.answer(reason_removed, show_alert=False) # Notify user why it was removed
+            applied_discount_info = context.user_data['applied_discount']
+            # Recalculate total after reseller discounts
+            total_after_reseller_decimal = Decimal('0.0')
+            for item in context.user_data['basket']:
+                original_price = item.get('price', Decimal('0.0'))
+                product_type = item.get('product_type', '')
+                reseller_discount_percent = get_reseller_discount(user_id, product_type)
+                item_reseller_discount = (original_price * reseller_discount_percent / Decimal('100')).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+                total_after_reseller_decimal += (original_price - item_reseller_discount)
+
+            # Validate against new reseller-adjusted total
+            code_valid, validation_message, _ = validate_discount_code(applied_discount_info['code'], float(total_after_reseller_decimal))
+            if not code_valid:
+                reason_removed = lang_data.get("discount_removed_invalid_basket", "Discount removed (basket changed).")
+                logger.info(f"Removing invalid general discount '{applied_discount_info['code']}' for user {user_id} after item removal.")
+                context.user_data.pop('applied_discount', None);
+                await query.answer(reason_removed, show_alert=False) # Notify user why it was removed
+        # --- End Re-validation ---
 
     except sqlite3.Error as e:
         if conn and conn.in_transaction: conn.rollback()
@@ -1035,7 +1238,12 @@ async def handle_remove_from_basket(update: Update, context: ContextTypes.DEFAUL
         logger.error(f"Unexpected error removing item {product_id_to_remove} user {user_id}: {e}", exc_info=True); await query.edit_message_text("❌ Error: Unexpected issue removing item.", parse_mode=None); return
     finally:
         if conn: conn.close()
+
+    # Refresh basket view
     await handle_view_basket(update, context)
+
+# --- END handle_remove_from_basket ---
+
 
 async def handle_clear_basket(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     query = update.callback_query
@@ -1073,7 +1281,7 @@ async def handle_clear_basket(update: Update, context: ContextTypes.DEFAULT_TYPE
         if conn: conn.close()
 
 
-# --- Confirm Pay Handler (Modified for Insufficient Balance) ---
+# --- Confirm Pay Handler (Modified for Reseller Discount) ---
 async def handle_confirm_pay(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     """Handles the 'Pay Now' button press from the basket."""
     query = update.callback_query
@@ -1083,7 +1291,7 @@ async def handle_confirm_pay(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     clear_expired_basket(context, user_id) # Sync call
     basket = context.user_data.get("basket", [])
-    applied_discount_info = context.user_data.get('applied_discount')
+    applied_discount_info = context.user_data.get('applied_discount') # General discount
 
     if not basket:
         await query.answer("Your basket is empty!", show_alert=True)
@@ -1093,44 +1301,56 @@ async def handle_confirm_pay(update: Update, context: ContextTypes.DEFAULT_TYPE,
     # --- Variables to store results ---
     conn = None
     original_total = Decimal('0.0')
-    final_total = Decimal('0.0')
+    total_after_reseller = Decimal('0.0') # <<< NEW Total after reseller discount
+    final_total = Decimal('0.0') # Final total after ALL discounts
     valid_basket_items_snapshot = []
-    discount_code_to_use = None
+    discount_code_to_use = None # General discount code
     user_balance = Decimal('0.0')
     error_occurred = False # Flag
 
-    # --- Fetch data and calculate ---
+    # --- Fetch data and calculate (Secure Recalculation) ---
     try:
         conn = get_db_connection()
         c = conn.cursor()
 
         product_ids_in_basket = list(set(item['product_id'] for item in basket))
         if not product_ids_in_basket:
+             logger.warning(f"Basket context had items, but no product IDs found for user {user_id}.")
              await query.answer("Basket empty after validation.", show_alert=True)
              await handle_view_basket(update, context) # Use await
              return
 
         placeholders = ','.join('?' for _ in product_ids_in_basket)
-        # Fetch necessary details for snapshot
+        # Fetch necessary details including product_type
         c.execute(f"SELECT id, price, name, size, product_type FROM products WHERE id IN ({placeholders})", product_ids_in_basket)
-        prices_dict = {row['id']: dict(row) for row in c.fetchall()} # Store full dict
+        product_db_details = {row['id']: dict(row) for row in c.fetchall()} # Store full dict
 
-        for item in basket:
-             prod_id = item['product_id']
-             if prod_id in prices_dict:
-                 db_price = Decimal(str(prices_dict[prod_id]['price']))
-                 original_total += db_price
+        # Calculate totals considering reseller discount
+        for item_context in basket:
+             prod_id = item_context.get('product_id')
+             if prod_id in product_db_details:
+                 details = product_db_details[prod_id]
+                 item_original_price = Decimal(str(details['price']))
+                 item_product_type = details['product_type']
+
+                 original_total += item_original_price
+
+                 # Apply reseller discount
+                 item_reseller_discount_percent = get_reseller_discount(user_id, item_product_type)
+                 item_reseller_discount = (item_original_price * item_reseller_discount_percent / Decimal('100')).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+                 item_price_after_reseller = item_original_price - item_reseller_discount
+                 total_after_reseller += item_price_after_reseller
+
                  # Create snapshot with necessary info for later processing
                  item_snapshot = {
                      "product_id": prod_id,
-                     "price": float(db_price), # Store as float for JSON later
-                     "name": prices_dict[prod_id]['name'],
-                     "size": prices_dict[prod_id]['size'],
-                     "product_type": prices_dict[prod_id]['product_type']
-                     # timestamp is not needed in snapshot for final processing
+                     "price": float(item_original_price), # Store original price as float for JSON later
+                     "name": details['name'],
+                     "size": details['size'],
+                     "product_type": item_product_type
                  }
                  valid_basket_items_snapshot.append(item_snapshot)
-             else: logger.warning(f"Product {prod_id} missing during payment confirm user {user_id}.")
+             else: logger.warning(f"Product {prod_id} missing during payment confirm user {user_id} (DB fetch).")
 
         if not valid_basket_items_snapshot:
              context.user_data['basket'] = []
@@ -1141,24 +1361,28 @@ async def handle_confirm_pay(update: Update, context: ContextTypes.DEFAULT_TYPE,
              except telegram_error.BadRequest: await send_message_with_retry(context.bot, chat_id, "❌ Error: All items unavailable.", reply_markup=InlineKeyboardMarkup(keyboard_back), parse_mode=None)
              return
 
-        final_total = original_total
+        # Apply general discount (if any) on top of reseller-discounted total
+        final_total = total_after_reseller # Start with reseller discounted total
         if applied_discount_info:
-            code_valid, _, discount_details = validate_discount_code(applied_discount_info['code'], float(original_total))
+            # Validate general code against total *after* reseller discount
+            code_valid, _, discount_details = validate_discount_code(applied_discount_info['code'], float(total_after_reseller))
             if code_valid and discount_details:
+                # final_total is correctly calculated by validate_discount_code based on the input base_total
                 final_total = Decimal(str(discount_details['final_total']))
                 discount_code_to_use = applied_discount_info.get('code')
+                # Update context just in case (although usually done in basket view)
                 context.user_data['applied_discount']['final_total'] = float(final_total)
                 context.user_data['applied_discount']['amount'] = discount_details['discount_amount']
             else:
-                final_total = original_total
+                # General discount became invalid
+                final_total = total_after_reseller # Revert to reseller total
                 discount_code_to_use = None
                 context.user_data.pop('applied_discount', None)
-                await query.answer("Applied discount became invalid.", show_alert=True)
+                await query.answer("Applied discount code became invalid.", show_alert=True)
 
-        if final_total < Decimal('0.0'):
-             await query.answer("Cannot process negative amount.", show_alert=True)
-             return
+        if final_total < Decimal('0.0'): final_total = Decimal('0.0') # Ensure total isn't negative
 
+        # Get user balance
         c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
         balance_result = c.fetchone()
         user_balance = Decimal(str(balance_result['balance'])) if balance_result else Decimal('0.0')
@@ -1179,17 +1403,17 @@ async def handle_confirm_pay(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return # Stop execution if an error happened
 
     # --- Balance Comparison and Action Logic ---
-    logger.info(f"Payment confirm user {user_id}. Final Total: {final_total:.2f}, Balance: {user_balance:.2f}. Basket: {valid_basket_items_snapshot}")
+    logger.info(f"Payment confirm user {user_id}. Final Total (after all discounts): {final_total:.2f}, Balance: {user_balance:.2f}. Basket Snapshot: {valid_basket_items_snapshot}")
 
     if user_balance >= final_total:
-        # Pay with balance (Existing Logic - Calls helper which handles finalization)
+        # Pay with balance
         logger.info(f"Sufficient balance user {user_id}. Processing with balance.")
         try:
             if query.message: await query.edit_message_text("⏳ Processing payment with balance...", reply_markup=None, parse_mode=None)
             else: await send_message_with_retry(context.bot, chat_id, "⏳ Processing payment with balance...", parse_mode=None)
         except telegram_error.BadRequest: await query.answer("Processing...")
 
-        # Pass the *snapshot* created earlier
+        # Pass the snapshot and potentially the general discount code used
         success = await payment.process_purchase_with_balance(user_id, final_total, valid_basket_items_snapshot, discount_code_to_use, context)
 
         if success:
@@ -1199,46 +1423,30 @@ async def handle_confirm_pay(update: Update, context: ContextTypes.DEFAULT_TYPE,
         # else: Failure message handled within process_purchase_with_balance
 
     else:
-        # --- INSUFFICIENT BALANCE - NEW FLOW ---
-        logger.info(f"Insufficient balance user {user_id}. Prompting for discount/crypto.")
+        # --- INSUFFICIENT BALANCE - Pay with Crypto Flow ---
+        logger.info(f"Insufficient balance user {user_id}. Prompting for crypto payment.")
 
-        # Store necessary info for the next steps
+        # Store necessary info for the crypto payment flow
         context.user_data['basket_pay_snapshot'] = valid_basket_items_snapshot
-        context.user_data['basket_pay_total_eur'] = float(final_total)
-        context.user_data['basket_pay_discount_code'] = discount_code_to_use # May be None
+        context.user_data['basket_pay_total_eur'] = float(final_total) # <<< Store FINAL total to pay
+        context.user_data['basket_pay_discount_code'] = discount_code_to_use # Store general code used
 
-        needed_amount_str = format_currency(final_total)
-        balance_str = format_currency(user_balance)
-
-        insufficient_msg_template = lang_data.get("insufficient_balance_pay_option", "⚠️ Insufficient Balance! ({balance} / {required} EUR)")
-        prompt_discount_msg = lang_data.get("prompt_discount_or_pay", "Do you have a discount code to apply before paying with crypto?")
-        pay_crypto_button_text = lang_data.get("pay_crypto_button", "💳 Pay with Crypto")
-        apply_discount_button_text = lang_data.get("apply_discount_pay_button", "🏷️ Apply Discount Code")
-        back_basket_button_text = lang_data.get("back_basket_button", "Back to Basket")
-
-        full_msg = (f"{insufficient_msg_template.format(balance=balance_str, required=needed_amount_str)}\n\n"
-                   f"{prompt_discount_msg}")
-
-        keyboard = [
-            # Callback triggers asking for discount code
-            [InlineKeyboardButton(apply_discount_button_text, callback_data="apply_discount_basket_pay")],
-            # Callback skips discount and goes straight to crypto choice
-            [InlineKeyboardButton(pay_crypto_button_text, callback_data="skip_discount_basket_pay")],
-            [InlineKeyboardButton(f"⬅️ {back_basket_button_text}", callback_data="view_basket")]
-        ]
-        try:
-            await query.edit_message_text(full_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-        except telegram_error.BadRequest:
-            await send_message_with_retry(context.bot, chat_id, full_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        # Show crypto choices directly (no need for discount prompt again here)
+        await _show_crypto_choices_for_basket(update, context, edit_message=True)
         await query.answer() # Acknowledge button press
+
+# --- END handle_confirm_pay ---
+
 
 # --- NEW: Handler to Ask for Discount Code in Basket Pay Flow ---
 async def handle_apply_discount_basket_pay(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    # This handler is now primarily for applying a *general* discount code
+    # when the user chooses to pay with crypto but wants to add a code first.
     query = update.callback_query
     user_id = query.from_user.id
     lang, lang_data = _get_lang_data(context)
 
-    # Check if context for this flow exists
+    # Check if context for this flow exists (snapshot and total AFTER reseller)
     if 'basket_pay_snapshot' not in context.user_data or 'basket_pay_total_eur' not in context.user_data:
         logger.error(f"User {user_id} clicked apply_discount_basket_pay but context is missing.")
         await query.answer("Error: Context lost. Please go back to basket.", show_alert=True)
@@ -1247,8 +1455,8 @@ async def handle_apply_discount_basket_pay(update: Update, context: ContextTypes
     context.user_data['state'] = 'awaiting_basket_discount_code' # New state
     prompt_msg = lang_data.get("basket_pay_enter_discount", "Please enter discount code for this purchase:")
     cancel_button_text = lang_data.get("cancel_button", "Cancel")
-    # Cancel goes back to the discount/pay choice prompt
-    keyboard = [[InlineKeyboardButton(f"❌ {cancel_button_text}", callback_data="confirm_pay")]] # Re-trigger confirm_pay to show options again
+    # Cancel goes back to the crypto choice prompt (as if skipping discount)
+    keyboard = [[InlineKeyboardButton(f"❌ {cancel_button_text}", callback_data="skip_discount_basket_pay")]]
 
     await query.edit_message_text(prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
     await query.answer("Enter discount code in chat.")
@@ -1256,6 +1464,7 @@ async def handle_apply_discount_basket_pay(update: Update, context: ContextTypes
 
 # --- NEW: Message Handler for Basket Pay Discount Code ---
 async def handle_basket_discount_code_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ Handles the general discount code entered during the crypto pay flow """
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     state = context.user_data.get("state")
@@ -1267,10 +1476,12 @@ async def handle_basket_discount_code_message(update: Update, context: ContextTy
     entered_code = update.message.text.strip()
     context.user_data.pop('state', None) # Clear state after getting code
 
-    # Retrieve original total needed for validation
+    # Retrieve context for this flow (snapshot and total AFTER reseller)
     basket_snapshot = context.user_data.get('basket_pay_snapshot')
-    if not basket_snapshot:
-        logger.error(f"User {user_id} sent basket discount code but snapshot context is missing.")
+    total_after_reseller_float = context.user_data.get('basket_pay_total_eur') # This total is already after reseller discount
+
+    if basket_snapshot is None or total_after_reseller_float is None:
+        logger.error(f"User {user_id} sent basket discount code but snapshot/total context is missing.")
         await send_message_with_retry(context.bot, chat_id, "Error: Context lost. Returning to basket.", parse_mode=None)
         # Clean up potentially stale context
         context.user_data.pop('basket_pay_snapshot', None)
@@ -1278,32 +1489,33 @@ async def handle_basket_discount_code_message(update: Update, context: ContextTy
         context.user_data.pop('basket_pay_discount_code', None)
         return await handle_view_basket(update, context) # Send back to basket
 
-    # Calculate original total from snapshot
-    original_total_float = sum(item.get('price', 0.0) for item in basket_snapshot)
-
     if not entered_code:
         await send_message_with_retry(context.bot, chat_id, lang_data.get("no_code_entered", "No code entered."), parse_mode=None)
-        # Re-show crypto choices without discount
+        # Re-show crypto choices using the existing (reseller-discounted) total
         await _show_crypto_choices_for_basket(update, context)
         return
 
-    code_valid, validation_message, discount_details = validate_discount_code(entered_code, original_total_float)
+    # Validate the entered *general* code against the *reseller-discounted* total
+    code_valid, validation_message, discount_details = validate_discount_code(entered_code, total_after_reseller_float)
 
     feedback_msg_template = ""
     if code_valid and discount_details:
-        new_final_total = discount_details['final_total']
-        context.user_data['basket_pay_total_eur'] = new_final_total # Update the total to pay
-        context.user_data['basket_pay_discount_code'] = entered_code # Store the code used
-        logger.info(f"User {user_id} applied valid basket discount '{entered_code}'. New total: {new_final_total:.2f} EUR")
+        new_final_total_float = discount_details['final_total']
+        # *** UPDATE the total to pay for crypto ***
+        context.user_data['basket_pay_total_eur'] = new_final_total_float
+        # *** Store the general code used ***
+        context.user_data['basket_pay_discount_code'] = entered_code
+        logger.info(f"User {user_id} applied valid basket discount '{entered_code}'. New FINAL total for crypto: {new_final_total_float:.2f} EUR")
         feedback_msg_template = lang_data.get("basket_pay_code_applied", "✅ Code '{code}' applied. New total: {total} EUR. Choose crypto:")
-        feedback_msg = feedback_msg_template.format(code=entered_code, total=format_currency(new_final_total))
+        feedback_msg = feedback_msg_template.format(code=entered_code, total=format_currency(new_final_total_float))
     else:
-        # Keep original total, don't store discount code
+        # Keep the reseller-discounted total, don't store general discount code
         context.user_data['basket_pay_discount_code'] = None
         logger.warning(f"User {user_id} entered invalid basket discount '{entered_code}': {validation_message}")
-        original_total_eur = context.user_data.get('basket_pay_total_eur', 0.0) # Get potentially pre-discount total back
+        # Use the total that was already adjusted for reseller discounts
+        total_to_pay_str = format_currency(total_after_reseller_float)
         feedback_msg_template = lang_data.get("basket_pay_code_invalid", "❌ Code invalid: {reason}. Choose crypto to pay {total} EUR:")
-        feedback_msg = feedback_msg_template.format(reason=validation_message, total=format_currency(original_total_eur))
+        feedback_msg = feedback_msg_template.format(reason=validation_message, total=total_to_pay_str)
 
     # Delete the user's message containing the code
     try:
@@ -1311,12 +1523,14 @@ async def handle_basket_discount_code_message(update: Update, context: ContextTy
     except Exception as e:
         logger.warning(f"Could not delete user's discount code message: {e}")
 
-    # Send feedback and show crypto choices
+    # Send feedback and show crypto choices (using the potentially updated basket_pay_total_eur)
     await send_message_with_retry(context.bot, chat_id, feedback_msg, parse_mode=None)
     await _show_crypto_choices_for_basket(update, context)
 
+
 # --- NEW: Handler to Skip Discount in Basket Pay Flow ---
 async def handle_skip_discount_basket_pay(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """ Skips adding a general discount code and proceeds to crypto selection """
     query = update.callback_query
     user_id = query.from_user.id
 
@@ -1326,9 +1540,11 @@ async def handle_skip_discount_basket_pay(update: Update, context: ContextTypes.
         await query.answer("Error: Context lost. Please go back to basket.", show_alert=True)
         return await handle_view_basket(update, context) # Go back to basket
 
-    context.user_data['basket_pay_discount_code'] = None # Ensure no discount code is stored
+    # Ensure no general discount code is stored if skipped
+    context.user_data['basket_pay_discount_code'] = None
     await query.answer("Skipping discount...")
     # Edit the previous message to show crypto choices
+    # The total stored in basket_pay_total_eur is already correct (after reseller)
     await _show_crypto_choices_for_basket(update, context, edit_message=True)
 
 
@@ -1339,14 +1555,14 @@ async def _show_crypto_choices_for_basket(update: Update, context: ContextTypes.
     chat_id = update.effective_chat.id
     lang, lang_data = _get_lang_data(context)
 
-    # Get stored total
+    # Get stored total (this should now be the final total after all discounts)
     total_eur_float = context.user_data.get('basket_pay_total_eur')
     if total_eur_float is None:
         logger.error("Cannot show crypto choices for basket: total EUR missing from context.")
         msg = "Error: Payment amount missing. Returning to basket."
         kb = [[InlineKeyboardButton("⬅️ Back", callback_data="view_basket")]]
-        if query and edit_message: await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
-        else: await send_message_with_retry(context.bot, chat_id, msg, reply_markup=InlineKeyboardMarkup(kb))
+        if query and edit_message: await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=None)
+        else: await send_message_with_retry(context.bot, chat_id, msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=None)
         if query: await query.answer("Error: Amount missing.", show_alert=True)
         return
 
@@ -1815,3 +2031,4 @@ async def handle_refill_amount_message(update: Update, context: ContextTypes.DEF
         await send_message_with_retry(context.bot, chat_id, f"❌ {unexpected_error_msg}", parse_mode=None)
         context.user_data.pop('state', None)
         context.user_data.pop('refill_eur_amount', None)
+)
