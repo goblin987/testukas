@@ -148,23 +148,18 @@ def remove_job_if_exists(name: str, context: ContextTypes.DEFAULT_TYPE) -> bool:
 
 # --- Helper to Prepare and Confirm Drop (Handles Download) ---
 async def _prepare_and_confirm_drop(
-    # update: Update | None, # Update object is not reliably passed/used here
-    context: ContextTypes.DEFAULT_TYPE, # Keep context for bot, etc.
-    user_data: dict, # <--- Pass the specific user's data dictionary
-    chat_id: int,    # <--- Pass chat_id explicitly
-    user_id: int,    # <--- Pass user_id explicitly
+    context: ContextTypes.DEFAULT_TYPE,
+    user_data: dict,
+    chat_id: int,
+    user_id: int,
     text: str,
-    collected_media_info: list # List of dicts [{'type': str, 'file_id': str}]
+    collected_media_info: list
     ):
     """Downloads media (if any) and presents the confirmation message."""
-
-    # Check context requirements again before proceeding
     required_context = ["admin_city", "admin_district", "admin_product_type", "pending_drop_size", "pending_drop_price"]
-    # Use the passed user_data dictionary
     if not all(k in user_data for k in required_context):
         logger.error(f"_prepare_and_confirm_drop: Context lost for user {user_id}.")
         await send_message_with_retry(context.bot, chat_id, "❌ Error: Context lost. Please start adding product again.", parse_mode=None)
-        # Clear potentially incomplete states from the passed user_data
         keys_to_clear = ["state", "pending_drop", "pending_drop_size", "pending_drop_price", "collecting_media_group_id", "collected_media"]
         for key in keys_to_clear: user_data.pop(key, None)
         return
@@ -177,13 +172,11 @@ async def _prepare_and_confirm_drop(
         try:
             temp_dir = await asyncio.to_thread(tempfile.mkdtemp)
             logger.info(f"Created temp dir for media download: {temp_dir} (User: {user_id})")
-
             for i, media_info in enumerate(collected_media_info):
                 media_type = media_info['type']
                 file_id = media_info['file_id']
                 file_extension = ".jpg" if media_type == "photo" else ".mp4" if media_type in ["video", "gif"] else ".dat"
                 temp_file_path = os.path.join(temp_dir, f"{file_id}{file_extension}")
-
                 try:
                     logger.info(f"Downloading media {i+1}/{len(collected_media_info)} ({file_id}) to {temp_file_path}")
                     file_obj = await context.bot.get_file(file_id)
@@ -198,26 +191,22 @@ async def _prepare_and_confirm_drop(
                 except Exception as e:
                     logger.error(f"Unexpected error downloading media {i+1} ({file_id}): {e}", exc_info=True)
                     download_errors += 1
-
             if download_errors > 0:
                 await send_message_with_retry(context.bot, chat_id, f"⚠️ Warning: {download_errors} media file(s) failed to download. Adding drop with successfully downloaded media only.", parse_mode=None)
-
         except Exception as e:
              logger.error(f"Error setting up/during media download loop user {user_id}: {e}", exc_info=True)
              await send_message_with_retry(context.bot, chat_id, "⚠️ Warning: Error during media processing. Drop will be added without media.", parse_mode=None)
-             media_list_for_db = [] # Reset list if temp dir failed etc.
+             media_list_for_db = []
              if temp_dir and await asyncio.to_thread(os.path.exists, temp_dir): await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True); temp_dir = None
 
-    # --- Prepare Confirmation ---
-    # Use the passed user_data dictionary
     user_data["pending_drop"] = {
         "city": user_data["admin_city"], "district": user_data["admin_district"],
         "product_type": user_data["admin_product_type"], "size": user_data["pending_drop_size"],
         "price": user_data["pending_drop_price"], "original_text": text,
         "media": media_list_for_db,
-        "temp_dir": temp_dir # Store temp_dir path (or None)
+        "temp_dir": temp_dir
     }
-    user_data.pop("state", None) # Clear state *before* confirmation
+    user_data.pop("state", None)
 
     city_name = user_data['admin_city']
     dist_name = user_data['admin_district']
@@ -252,11 +241,10 @@ async def _process_collected_media(context: ContextTypes.DEFAULT_TYPE):
         return
 
     logger.info(f"Job executing: Process media group {media_group_id} for user {user_id}")
-    # Ensure user_data is accessed correctly via application
-    user_data = context.application.user_data.get(user_id, {}) # <<< MODIFIED HERE
+    user_data = context.application.user_data.get(user_id, {})
     if not user_data:
          logger.error(f"Job {media_group_id}: Could not find user_data for user {user_id}.")
-         return # <<< Exit if no user_data found
+         return
 
     collected_info = user_data.get('collected_media', {}).get(media_group_id)
     if not collected_info or 'media' not in collected_info:
@@ -289,10 +277,7 @@ async def handle_adm_drop_details_message(update: Update, context: ContextTypes.
 
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    # --- CORRECTION ---
-    # Use context.user_data for the current user's data dictionary
     user_specific_data = context.user_data
-    # --- END CORRECTION ---
 
     if user_id != ADMIN_ID: return
 
@@ -344,7 +329,6 @@ async def handle_adm_drop_details_message(update: Update, context: ContextTypes.
             context.job_queue.run_once(
                 _process_collected_media,
                 when=timedelta(seconds=MEDIA_GROUP_COLLECTION_DELAY),
-                # Pass user_id to the job data
                 data={'media_group_id': media_group_id, 'chat_id': chat_id, 'user_id': user_id},
                 name=job_name,
                 job_kwargs={'misfire_grace_time': 15}
@@ -779,9 +763,25 @@ async def handle_confirm_add_drop(update: Update, context: ContextTypes.DEFAULT_
     product_name = f"{p_type} {size} {int(time.time())}"; conn = None; product_id = None
     try:
         conn = get_db_connection(); c = conn.cursor(); c.execute("BEGIN")
-        c.execute("""INSERT INTO products (city, district, product_type, size, name, price, available, reserved, original_text, added_by, added_date) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)""",
-                  (city, district, p_type, size, price, original_text, ADMIN_ID, datetime.now(timezone.utc).isoformat()))
+        # <<< CORRECTED: Use explicit tuple definition and add logging >>>
+        insert_params = (
+            city,            # 1
+            district,        # 2
+            p_type,          # 3
+            size,            # 4
+            product_name,    # 5
+            price,           # 6
+            original_text,   # 7
+            ADMIN_ID,        # 8
+            datetime.now(timezone.utc).isoformat() # 9
+        )
+        logger.debug(f"Inserting product with params count: {len(insert_params)}") # Add debug log
+        c.execute("""INSERT INTO products
+                        (city, district, product_type, size, name, price, available, reserved, original_text, added_by, added_date)
+                     VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)""", insert_params)
+        # <<< END CORRECTION >>>
         product_id = c.lastrowid
+
         if product_id and media_list and temp_dir:
             final_media_dir = os.path.join(MEDIA_DIR, str(product_id)); await asyncio.to_thread(os.makedirs, final_media_dir, exist_ok=True); media_inserts = []
             for media_item in media_list:
@@ -794,6 +794,7 @@ async def handle_confirm_add_drop(update: Update, context: ContextTypes.DEFAULT_
                     else: logger.warning(f"Temp media not found: {temp_file_path}")
                 else: logger.warning(f"Incomplete media item: {media_item}")
             if media_inserts: c.executemany("INSERT INTO product_media (product_id, media_type, file_path, telegram_file_id) VALUES (?, ?, ?, ?)", media_inserts)
+
         conn.commit(); logger.info(f"Added product {product_id} ({product_name}).")
         if temp_dir and await asyncio.to_thread(os.path.exists, temp_dir): await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True); logger.info(f"Cleaned temp dir: {temp_dir}")
         await query.edit_message_text("✅ Drop Added Successfully!", parse_mode=None)
@@ -1887,10 +1888,7 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await query.answer("Permission denied for this action.", show_alert=True)
         return
 
-    # --- CORRECTION ---
-    # Use context.user_data instead of context.application.user_data.setdefault()
     user_specific_data = context.user_data
-    # --- END CORRECTION ---
     action = user_specific_data.pop("confirm_action", None)
 
     if not action:
@@ -2059,18 +2057,21 @@ async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE,
             try:
                 reseller_id = int(action_params[0])
                 product_type = action_params[1]
+                # Get old value for logging before deleting
                 c.execute("SELECT discount_percentage FROM reseller_discounts WHERE reseller_user_id = ? AND product_type = ?", (reseller_id, product_type))
                 old_res = c.fetchone()
-                old_value = old_res['discount_percentage'] if old_res else None # For logging
+                old_value = old_res['discount_percentage'] if old_res else None
+                # Delete the rule
                 delete_res_result = c.execute("DELETE FROM reseller_discounts WHERE reseller_user_id = ? AND product_type = ?", (reseller_id, product_type))
                 if delete_res_result.rowcount > 0:
                     conn.commit()
-                    log_admin_action(admin_id, ACTION_RESELLER_DISCOUNT_DELETE, reseller_id, reason=f"Type: {product_type}", old_value=old_value)
+                    # Log the action
+                    log_admin_action(user_id, ACTION_RESELLER_DISCOUNT_DELETE, reseller_id, reason=f"Type: {product_type}", old_value=old_value)
                     success_msg = f"✅ Reseller discount rule deleted for {product_type}."
-                    next_callback = f"reseller_manage_specific|{reseller_id}"
+                    next_callback = f"reseller_manage_specific|{reseller_id}" # Go back to specific user's discount list
                 else:
                     conn.rollback(); success_msg = f"❌ Error: Reseller discount rule for {product_type} not found."
-                    next_callback = f"reseller_manage_specific|{reseller_id}"
+                    next_callback = f"reseller_manage_specific|{reseller_id}" # Still go back
             except (ValueError, IndexError) as param_err:
                 conn.rollback(); logger.error(f"Invalid params for delete reseller discount: {action_params} - {param_err}")
                 success_msg = "❌ Error processing request."; next_callback = "admin_menu"
