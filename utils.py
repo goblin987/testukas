@@ -1,5 +1,3 @@
-# --- START OF FILE utils.py ---
-
 import sqlite3
 import time
 import os
@@ -8,17 +6,17 @@ import json
 import shutil
 import tempfile
 import asyncio
-from datetime import datetime, timedelta, timezone # Keep timezone
-from decimal import Decimal, ROUND_DOWN, ROUND_UP # Use Decimal for financial calculations
-import requests # Added for API calls
-from collections import Counter, defaultdict # Keep defaultdict
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
+import requests
+from collections import Counter, defaultdict # Moved higher up
 
 # --- Telegram Imports ---
 from telegram import Update, Bot
-from telegram.constants import ParseMode # Keep import but change default usage
+from telegram.constants import ParseMode
 import telegram.error as telegram_error
 from telegram.ext import ContextTypes
-from telegram import helpers # Keep for potential other uses, but not escaping
+from telegram import helpers
 # -------------------------
 
 # --- Logging Setup ---
@@ -92,6 +90,7 @@ THEMES = {
 # ==============================================================
 # ===== V V V V V      LANGUAGE DICTIONARY     V V V V V ======
 # ==============================================================
+# Define LANGUAGES dictionary FIRST
 LANGUAGES = {
     # --- English ---
     "en": {
@@ -185,6 +184,8 @@ LANGUAGES = {
         "back_basket_button": "Back to Basket",
         "error_adding_db": "Error: Database issue adding item to basket.",
         "error_adding_unexpected": "Error: An unexpected issue occurred.",
+        # Reseller Discount specific basket text
+        "reseller_discount_label": "Reseller Discount", # <<< NEW
 
         # --- Discounts ---
         "discount_no_items": "Your basket is empty. Add items first.",
@@ -240,6 +241,7 @@ LANGUAGES = {
         "error_loading_prices_db": "Error: Failed to Load Price List for {city_name}",
         "error_displaying_prices": "Error displaying price list.",
         "error_unexpected_prices": "Error: An unexpected issue occurred while generating the price list.",
+        "available_label": "available", # Used in price list
 
         # --- Reviews ---
         "reviews": "📝 Reviews Menu",
@@ -291,7 +293,7 @@ LANGUAGES = {
         "cancel_top_up_button": "Cancel Top Up",
         "preparing_invoice": "⏳ Preparing your payment invoice...",
         "failed_invoice_creation": "❌ Failed to create payment invoice. This could be a temporary issue with the payment provider or an API key problem. Please try again later or contact support.",
-        "error_preparing_payment": "❌ An error occurred while preparing the payment. Please try again later.",
+        "error_preparing_payment": "❌ An error occurred while preparing the payment details. Please try again later.",
         "top_up_success_title": "✅ Top Up Successful!",
         "amount_added_label": "Amount Added",
         "new_balance_label": "Your new balance",
@@ -388,11 +390,11 @@ LANGUAGES = {
         "welcome_activate_fail": "❌ Failed to activate template '{name}'.",
         "welcome_add_name_prompt": "Enter a unique short name for the new template (e.g., 'default', 'promo_weekend'):",
         "welcome_add_name_exists": "❌ Error: A template with the name '{name}' already exists.",
-        "welcome_add_text_prompt": "Template Name: {name}\n\nPlease reply with the full welcome message text. Available placeholders:\n{placeholders}", # Plain text placeholders
+        "welcome_add_text_prompt": "Template Name: {name}\n\nPlease reply with the full welcome message text. Available placeholders:\n`{placeholders}`", # Escaped placeholders
         "welcome_add_description_prompt": "Optional: Enter a short description for this template (admin view only). Send '-' to skip.", # <<< NEW
         "welcome_add_success": "✅ Welcome message template '{name}' added.",
         "welcome_add_fail": "❌ Failed to add welcome message template.",
-        "welcome_edit_text_prompt": "Editing Text for '{name}'. Current text:\n\n{current_text}\n\nPlease reply with the new text. Available placeholders:\n{placeholders}", # Plain text placeholders
+        "welcome_edit_text_prompt": "Editing Text for '{name}'. Current text:\n\n{current_text}\n\nPlease reply with the new text. Available placeholders:\n`{placeholders}`", # Escaped placeholders
         "welcome_edit_description_prompt": "Editing description for '{name}'. Current: '{current_desc}'.\n\nEnter new description or send '-' to keep current.", # <<< NEW
         "welcome_edit_success": "✅ Template '{name}' updated.",
         "welcome_edit_fail": "❌ Failed to update template '{name}'.",
@@ -421,32 +423,452 @@ LANGUAGES = {
     # --- Lithuanian ---
     "lt": {
         "native_name": "Lietuvių",
-        # ... (all existing LT translations) ...
+        # --- General & Menu ---
+        "welcome": "👋 Sveiki, {username}!\n\n👤 Būsena: {status} {progress_bar}\n💰 Balansas: {balance_str} EUR\n📦 Viso pirkimų: {purchases}\n🛒 Krepšelyje: {basket_count} prekė(s)\n\nPradėkite apsipirkti arba naršykite parinktis žemiau.\n\n⚠️ Pastaba: Pinigai negrąžinami.",
+        "status_label": "Būsena",
+        "balance_label": "Balansas",
+        "purchases_label": "Viso pirkimų",
+        "basket_label": "Krepšelyje",
+        "shopping_prompt": "Pradėkite apsipirkti arba naršykite parinktis žemiau.",
+        "refund_note": "Pastaba: Pinigai negrąžinami.",
+        "shop_button": "Parduotuvė", # <-- Example Translation
+        "profile_button": "Profilis", # <-- Example Translation
+        "top_up_button": "Papildyti", # <-- Example Translation
+        "reviews_button": "Atsiliepimai", # <-- Example Translation
+        "price_list_button": "Kainoraštis", # <-- Example Translation
+        "language_button": "Kalba", # <-- Example Translation
+        "admin_button": "🔧 Admino Panelė",
+        "home_button": "Pradžia", # <-- Example Translation
+        "back_button": "Atgal", # <-- Example Translation
+        "cancel_button": "Atšaukti", # <-- Example Translation
+        "error_occurred_answer": "Įvyko klaida. Bandykite dar kartą.",
+        "success_label": "Pavyko!",
+        "error_unexpected": "Įvyko netikėta klaida",
+
+        # --- Shopping Flow ---
+        "choose_city_title": "Pasirinkite miestą",
+        "select_location_prompt": "Pasirinkite savo vietą:",
+        "no_cities_available": "Šiuo metu nėra miestų. Patikrinkite vėliau.",
+        "error_city_not_found": "Klaida: Miestas nerastas.",
+        "choose_district_prompt": "Pasirinkite rajoną:",
+        "no_districts_available": "Šiame mieste dar nėra rajonų.",
+        "back_cities_button": "Atgal į miestus",
+        "error_district_city_not_found": "Klaida: Rajonas ar miestas nerastas.",
+        "select_type_prompt": "Pasirinkite produkto tipą:",
+        "no_types_available": "Šiuo metu čia nėra šio tipo produktų.",
+        "error_loading_types": "Klaida: Nepavyko įkelti produktų tipų",
+        "back_districts_button": "Atgal į rajonus",
+        "available_options_prompt": "Galimos parinktys:",
+        "no_items_of_type": "Šiuo metu čia nėra šio tipo prekių.",
+        "error_loading_products": "Klaida: Nepavyko įkelti produktų",
+        "back_types_button": "Atgal į tipus",
+        "price_label": "Kaina",
+        "available_label_long": "Yra",
+        "available_label_short": "Yra",
+        "add_to_basket_button": "Į krepšelį",
+        "error_location_mismatch": "Klaida: Vietos duomenų neatitikimas.",
+        "drop_unavailable": "Prekė neprieinama! Ši parinktis ką tik buvo parduota ar rezervuota.",
+        "error_loading_details": "Klaida: Nepavyko įkelti produkto detalių",
+        "back_options_button": "Atgal į parinktis",
+        "no_products_in_city_districts": "Šiuo metu nėra produktų jokiuose šio miesto rajonuose.",
+        "error_loading_districts": "Klaida įkeliant rajonus. Bandykite dar kartą.",
+
+        # --- Basket & Payment ---
+        "added_to_basket": "✅ Prekė Rezervuota!\n\n{item} yra jūsų krepšelyje {timeout} minutes! ⏳",
+        "expires_label": "Galioja iki",
+        "your_basket_title": "Jūsų krepšelis",
+        "basket_empty": "🛒 Jūsų krepšelis tuščias!",
+        "add_items_prompt": "Pridėkite prekių, kad pradėtumėte apsipirkti!",
+        "items_expired_note": "Prekės galėjo baigtis arba buvo pašalintos.",
+        "subtotal_label": "Tarpinė suma",
+        "total_label": "Viso",
+        "pay_now_button": "Mokėti dabar",
+        "clear_all_button": "Išvalyti viską",
+        "view_basket_button": "Peržiūrėti krepšelį",
+        "clear_basket_button": "Išvalyti krepšelį",
+        "remove_button_label": "Pašalinti",
+        "basket_already_empty": "Krepšelis jau tuščias.",
+        "basket_cleared": "🗑️ Krepšelis išvalytas!",
+        "pay": "💳 Mokėti viso: {amount} EUR",
+        "insufficient_balance": "⚠️ Nepakankamas balansas!\n\nPrašome papildyti, kad tęstumėte! 💸",
+        "insufficient_balance_pay_option": "⚠️ Nepakankamas balansas! ({balance} / {required} EUR)",
+        "pay_crypto_button": "💳 Mokėti Crypto",
+        "apply_discount_pay_button": "🏷️ Panaudoti nuolaidos kodą",
+        "skip_discount_button": "⏩ Praleisti nuolaidą",
+        "prompt_discount_or_pay": "Ar turite nuolaidos kodą, kurį norite panaudoti prieš mokant kriptovaliuta?",
+        "basket_pay_enter_discount": "Įveskite nuolaidos kodą šiam pirkiniui:",
+        "basket_pay_code_applied": "✅ Kodas '{code}' pritaikytas. Nauja suma: {total} EUR. Pasirinkite kriptovaliutą:",
+        "basket_pay_code_invalid": "❌ Kodas negalioja: {reason}. Pasirinkite kriptovaliutą mokėti {total} EUR:",
+        "choose_crypto_for_purchase": "Pasirinkite kriptovaliutą mokėti {amount} EUR už jūsų krepšelį:",
+        "crypto_purchase_success": "Mokėjimas patvirtintas! Jūsų pirkimo detalės siunčiamos.",
+        "crypto_purchase_failed": "Mokėjimas nepavyko/baigėsi. Jūsų prekės nebėra rezervuotos.",
+        "basket_pay_too_low": "Krepšelio suma {basket_total} EUR yra mažesnė nei minimali {currency}.",
+        "balance_changed_error": "❌ Transakcija nepavyko: Jūsų balansas pasikeitė. Patikrinkite balansą ir bandykite dar kartą.",
+        "order_failed_all_sold_out_balance": "❌ Užsakymas nepavyko: Visos prekės krepšelyje tapo neprieinamos apdorojimo metu. Jūsų balansas nebuvo apmokestintas.",
+        "error_processing_purchase_contact_support": "❌ Apdorojant jūsų pirkimą įvyko klaida. Susisiekite su pagalba.",
+        "purchase_success": "🎉 Pirkimas baigtas!",
+        "sold_out_note": "⚠️ Pastaba: Šios prekės tapo neprieinamos apdorojimo metu ir nebuvo įtrauktos: {items}. Už jas nebuvote apmokestinti.",
+        "leave_review_now": "Palikti atsiliepimą dabar",
+        "back_basket_button": "Atgal į krepšelį",
+        "error_adding_db": "Klaida: Duomenų bazės problema dedant prekę į krepšelį.",
+        "error_adding_unexpected": "Klaida: Įvyko netikėta problema.",
+        "reseller_discount_label": "Perpardavėjo nuolaida", # <<< NEW
+
+        # --- Discounts ---
+        "discount_no_items": "Jūsų krepšelis tuščias. Pirmiausia pridėkite prekių.",
+        "enter_discount_code_prompt": "Įveskite savo nuolaidos kodą:",
+        "enter_code_answer": "Įveskite kodą pokalbyje.",
+        "apply_discount_button": "Pritaikyti nuolaidos kodą",
+        "no_code_provided": "Kodas neįvestas.",
+        "discount_code_not_found": "Nuolaidos kodas nerastas.",
+        "discount_code_inactive": "Šis nuolaidos kodas neaktyvus.",
+        "discount_code_expired": "Šio nuolaidos kodo galiojimas baigėsi.",
+        "invalid_code_expiry_data": "Neteisingi kodo galiojimo duomenys.",
+        "code_limit_reached": "Kodas pasiekė naudojimo limitą.",
+        "internal_error_discount_type": "Vidinė klaida apdorojant nuolaidos tipą.",
+        "db_error_validating_code": "Duomenų bazės klaida tikrinant kodą.",
+        "unexpected_error_validating_code": "Įvyko netikėta klaida.",
+        "code_applied_message": "Kodas '{code}' ({value}) pritaikytas. Nuolaida: -{amount} EUR",
+        "discount_applied_label": "Pritaikyta nuolaida",
+        "discount_value_label": "Vertė",
+        "discount_removed_note": "Nuolaidos kodas {code} pašalintas: {reason}",
+        "discount_removed_invalid_basket": "Nuolaida pašalinta (krepšelis pasikeitė).",
+        "remove_discount_button": "Pašalinti nuolaidą",
+        "discount_removed_answer": "Nuolaida pašalinta.",
+        "no_discount_answer": "Nuolaida nepritaikyta.",
+        "send_text_please": "Siųskite nuolaidos kodą kaip tekstą.",
+        "error_calculating_total": "Klaida skaičiuojant sumą.",
+        "returning_to_basket": "Grįžtama į krepšelį.",
+        "basket_empty_no_discount": "Krepšelis tuščias. Negalima pritaikyti nuolaidos kodo.",
+
+        # --- Profile & History ---
+        "profile_title": "Jūsų profilis",
+        "purchase_history_button": "Pirkimų istorija",
+        "back_profile_button": "Atgal į profilį",
+        "purchase_history_title": "Pirkimų istorija",
+        "no_purchases_yet": "Dar neatlikote jokių pirkimų.",
+        "recent_purchases_title": "Jūsų paskutiniai pirkimai",
+        "error_loading_profile": "❌ Klaida: Nepavyko įkelti profilio duomenų.",
+
+        # --- Language ---
+        "language_set_answer": "Kalba nustatyta į {lang}!",
+        "error_saving_language": "Klaida išsaugant kalbos nustatymą.",
+        "invalid_language_answer": "Pasirinkta neteisinga kalba.",
+        "language": "🌐 Kalba", # Menu title
+
+        # --- Price List ---
+        "no_cities_for_prices": "Nėra miestų, kuriuose būtų galima peržiūrėti kainas.",
+        "price_list_title": "Kainoraštis",
+        "select_city_prices_prompt": "Pasirinkite miestą, kad pamatytumėte galimus produktus ir kainas:",
+        "price_list_title_city": "Kainoraštis: {city_name}",
+        "no_products_in_city": "Šiame mieste šiuo metu nėra produktų.",
+        "back_city_list_button": "Atgal į miestų sąrašą",
+        "message_truncated_note": "Žinutė sutrumpinta dėl ilgio limito. Naudokite 'Parduotuvė' pilnai informacijai.",
+        "error_loading_prices_db": "Klaida: Nepavyko įkelti kainoraščio {city_name}",
+        "error_displaying_prices": "Klaida rodant kainoraštį.",
+        "error_unexpected_prices": "Klaida: Įvyko netikėta problema generuojant kainoraštį.",
+        "available_label": "yra", # Used in price list
+
+        # --- Reviews ---
+        "reviews": "📝 Atsiliepimų Meniu",
+        "view_reviews_button": "Peržiūrėti atsiliepimus",
+        "leave_review_button": "Palikti atsiliepimą",
+        "enter_review_prompt": "Įveskite savo atsiliepimo žinutę ir išsiųskite.",
+        "enter_review_answer": "Įveskite savo atsiliepimą pokalbyje.",
+        "send_text_review_please": "Siųskite tik tekstą savo atsiliepimui.",
+        "review_not_empty": "Atsiliepimas negali būti tuščias. Bandykite dar kartą arba atšaukite.",
+        "review_too_long": "Atsiliepimas per ilgas (maks. 1000 simbolių). Prašome sutrumpinti.",
+        "review_thanks": "Ačiū už jūsų atsiliepimą! Jūsų nuomonė padeda mums tobulėti.",
+        "error_saving_review_db": "Klaida: Nepavyko išsaugoti jūsų atsiliepimo dėl duomenų bazės problemos.",
+        "error_saving_review_unexpected": "Klaida: Įvyko netikėta problema saugant jūsų atsiliepimą.",
+        "user_reviews_title": "Vartotojų atsiliepimai",
+        "no_reviews_yet": "Dar nėra paliktų atsiliepimų.",
+        "no_more_reviews": "Nebėra daugiau atsiliepimų.",
+        "prev_button": "Ankst.",
+        "next_button": "Kitas",
+        "back_review_menu_button": "Atgal į Atsiliepimų Meniu",
+        "unknown_date_label": "Nežinoma data",
+        "error_displaying_review": "Klaida rodant atsiliepimą",
+        "error_updating_review_list": "Klaida atnaujinant atsiliepimų sąrašą.",
+
+        # --- Refill / NOWPayments ---
+        "payment_amount_too_low_api": "❌ Mokėjimo Suma Per Maža: {target_eur_amount} EUR atitikmuo {currency} \\({crypto_amount}\\) yra mažesnis už minimalų reikalaujamą mokėjimo teikėjo \\({min_amount} {currency}\\)\\. Bandykite didesnę EUR sumą\\.",
+        "error_min_amount_fetch": "❌ Klaida: Nepavyko gauti minimalios mokėjimo sumos {currency}\\. Bandykite vėliau arba pasirinkite kitą valiutą\\.",
+        "invoice_title_refill": "*Sąskaita Papildymui Sukurta*",
+        "invoice_title_purchase": "*Sąskaita Pirkimui Sukurta*",
+        "min_amount_label": "*Minimali Suma:*",
+        "payment_address_label": "*Mokėjimo Adresas:*",
+        "amount_label": "*Suma:*",
+        "expires_at_label": "*Galioja iki:*",
+        "send_warning_template": "⚠️ *Svarbu:* Siųskite *tiksliai* šią {asset} sumą šiuo adresu\\.",
+        "overpayment_note": "ℹ️ _Siųsti daugiau nei nurodyta suma yra gerai\\! Jūsų balansas bus papildytas pagal gautą sumą po tinklo patvirtinimo\\._",
+        "confirmation_note": "✅ Patvirtinimas automatinis per webhook po tinklo patvirtinimo\\.",
+        "error_estimate_failed": "❌ Klaida: Nepavyko įvertinti kriptovaliutos sumos. Bandykite dar kartą arba pasirinkite kitą valiutą.",
+        "error_estimate_currency_not_found": "❌ Klaida: Valiuta {currency} nepalaikoma įvertinimui. Pasirinkite kitą valiutą.",
+        "crypto_payment_disabled": "Balanso papildymas šiuo metu išjungtas.",
+        "top_up_title": "Papildyti balansą",
+        "enter_refill_amount_prompt": "Atsakykite su suma EUR, kurią norite pridėti prie balanso (pvz., 10 arba 25.50).",
+        "min_top_up_note": "Minimalus papildymas: {amount} EUR",
+        "enter_amount_answer": "Įveskite papildymo sumą.",
+        "send_amount_as_text": "Siųskite sumą kaip tekstą (pvz., 10 arba 25.50).",
+        "amount_too_low_msg": "Suma per maža. Minimalus papildymas yra {amount} EUR. Įveskite didesnę sumą.",
+        "amount_too_high_msg": "Suma per didelė. Įveskite mažesnę sumą.",
+        "invalid_amount_format_msg": "Neteisingas sumos formatas. Įveskite skaičių (pvz., 10 arba 25.50).",
+        "unexpected_error_msg": "Įvyko netikėta klaida. Bandykite vėliau.",
+        "choose_crypto_prompt": "Norite papildyti {amount} EUR. Pasirinkite kriptovaliutą, kuria norite mokėti:",
+        "cancel_top_up_button": "Atšaukti papildymą",
+        "preparing_invoice": "⏳ Ruošiama jūsų mokėjimo sąskaita...",
+        "failed_invoice_creation": "❌ Nepavyko sukurti mokėjimo sąskaitos. Tai gali būti laikina problema su mokėjimo teikėju arba API rakto problema. Bandykite vėliau arba susisiekite su pagalba.",
+        "error_preparing_payment": "❌ Ruošiant mokėjimo detales įvyko klaida. Bandykite vėliau.",
+        "top_up_success_title": "✅ Papildymas Sėkmingas!",
+        "amount_added_label": "Pridėta suma",
+        "new_balance_label": "Jūsų naujas balansas",
+        "error_nowpayments_api": "❌ Mokėjimo API Klaida: Nepavyko sukurti mokėjimo. Bandykite vėliau arba susisiekite su pagalba.",
+        "error_invalid_nowpayments_response": "❌ Mokėjimo API Klaida: Gautas neteisingas atsakymas. Susisiekite su pagalba.",
+        "error_nowpayments_api_key": "❌ Mokėjimo API Klaida: Neteisingas API raktas. Susisiekite su pagalba.",
+        "payment_pending_db_error": "❌ Duomenų Bazės Klaida: Nepavyko įrašyti laukiančio mokėjimo. Susisiekite su pagalba.",
+        "payment_cancelled_or_expired": "Mokėjimo Būsena: Jūsų mokėjimas ({payment_id}) buvo atšauktas arba baigėsi galiojimas.",
+        "webhook_processing_error": "Webhook Klaida: Nepavyko apdoroti mokėjimo atnaujinimo {payment_id}.",
+        "webhook_db_update_failed": "Kritinė Klaida: Mokėjimas {payment_id} patvirtintas, bet DB balanso atnaujinimas vartotojui {user_id} nepavyko. Reikalingas rankinis veiksmas.",
+        "webhook_pending_not_found": "Webhook Įspėjimas: Gautas mokėjimo ID {payment_id} atnaujinimas, bet DB nerasta laukiančio įrašo.",
+        "webhook_price_fetch_error": "Webhook Klaida: Nepavyko gauti {currency} kainos patvirtinti EUR vertę mokėjimui {payment_id}.",
     },
     # --- Russian ---
     "ru": {
         "native_name": "Русский",
-        # ... (all existing RU translations) ...
+        # --- General & Menu ---
+        "welcome": "👋 Добро пожаловать, {username}!\n\n👤 Статус: {status} {progress_bar}\n💰 Баланс: {balance_str} EUR\n📦 Всего покупок: {purchases}\n🛒 В корзине: {basket_count} товар(ов)\n\nНачните покупки или изучите опции ниже.\n\n⚠️ Примечание: Возврат средств невозможен.",
+        "status_label": "Статус",
+        "balance_label": "Баланс",
+        "purchases_label": "Всего покупок",
+        "basket_label": "В корзине",
+        "shopping_prompt": "Начните покупки или изучите опции ниже.",
+        "refund_note": "Примечание: Возврат средств невозможен.",
+        "shop_button": "Магазин", # <-- Example Translation
+        "profile_button": "Профиль", # <-- Example Translation
+        "top_up_button": "Пополнить", # <-- Example Translation
+        "reviews_button": "Отзывы", # <-- Example Translation
+        "price_list_button": "Прайс-лист", # <-- Example Translation
+        "language_button": "Язык", # <-- Example Translation
+        "admin_button": "🔧 Панель Админа",
+        "home_button": "Главная", # <-- Example Translation
+        "back_button": "Назад", # <-- Example Translation
+        "cancel_button": "Отмена", # <-- Example Translation
+        "error_occurred_answer": "Произошла ошибка. Пожалуйста, попробуйте еще раз.",
+        "success_label": "Успешно!",
+        "error_unexpected": "Произошла непредвиденная ошибка",
+
+        # --- Shopping Flow ---
+        "choose_city_title": "Выберите город",
+        "select_location_prompt": "Выберите ваше местоположение:",
+        "no_cities_available": "На данный момент нет доступных городов. Пожалуйста, зайдите позже.",
+        "error_city_not_found": "Ошибка: Город не найден.",
+        "choose_district_prompt": "Выберите район:",
+        "no_districts_available": "В этом городе пока нет доступных районов.",
+        "back_cities_button": "Назад к городам",
+        "error_district_city_not_found": "Ошибка: Район или город не найден.",
+        "select_type_prompt": "Выберите тип продукта:",
+        "no_types_available": "В данный момент здесь нет товаров этого типа.",
+        "error_loading_types": "Ошибка: Не удалось загрузить типы продуктов",
+        "back_districts_button": "Назад к районам",
+        "available_options_prompt": "Доступные варианты:",
+        "no_items_of_type": "В данный момент здесь нет товаров этого типа.",
+        "error_loading_products": "Ошибка: Не удалось загрузить продукты",
+        "back_types_button": "Назад к типам",
+        "price_label": "Цена",
+        "available_label_long": "Доступно",
+        "available_label_short": "Дост",
+        "add_to_basket_button": "В корзину",
+        "error_location_mismatch": "Ошибка: Несоответствие данных о местоположении.",
+        "drop_unavailable": "Товар недоступен! Этот вариант только что был распродан или зарезервирован кем-то другим.",
+        "error_loading_details": "Ошибка: Не удалось загрузить детали продукта",
+        "back_options_button": "Назад к вариантам",
+        "no_products_in_city_districts": "В настоящее время нет доступных товаров ни в одном районе этого города.",
+        "error_loading_districts": "Ошибка загрузки районов. Пожалуйста, попробуйте еще раз.",
+
+        # --- Basket & Payment ---
+        "added_to_basket": "✅ Товар зарезервирован!\n\n{item} в вашей корзине на {timeout} минут! ⏳",
+        "expires_label": "Истекает через",
+        "your_basket_title": "Ваша корзина",
+        "basket_empty": "🛒 Ваша корзина пуста!",
+        "add_items_prompt": "Добавьте товары, чтобы начать покупки!",
+        "items_expired_note": "Срок действия товаров мог истечь или они были удалены.",
+        "subtotal_label": "Подытог",
+        "total_label": "Итого",
+        "pay_now_button": "Оплатить сейчас",
+        "clear_all_button": "Очистить все",
+        "view_basket_button": "Посмотреть корзину",
+        "clear_basket_button": "Очистить корзину",
+        "remove_button_label": "Удалить",
+        "basket_already_empty": "Корзина уже пуста.",
+        "basket_cleared": "🗑️ Корзина очищена!",
+        "pay": "💳 К оплате: {amount} EUR",
+        "insufficient_balance": "⚠️ Недостаточно средств!\n\nПожалуйста, пополните баланс, чтобы продолжить! 💸",
+        "insufficient_balance_pay_option": "⚠️ Недостаточно средств! ({balance} / {required} EUR)",
+        "pay_crypto_button": "💳 Оплатить Crypto",
+        "apply_discount_pay_button": "🏷️ Применить промокод",
+        "skip_discount_button": "⏩ Пропустить скидку",
+        "prompt_discount_or_pay": "У вас есть промокод для применения перед оплатой криптовалютой?",
+        "basket_pay_enter_discount": "Введите промокод для этой покупки:",
+        "basket_pay_code_applied": "✅ Код '{code}' применен. Новая сумма: {total} EUR. Выберите криптовалюту:",
+        "basket_pay_code_invalid": "❌ Код недействителен: {reason}. Выберите криптовалюту для оплаты {total} EUR:",
+        "choose_crypto_for_purchase": "Выберите криптовалюту для оплаты {amount} EUR за вашу корзину:",
+        "crypto_purchase_success": "Оплата подтверждена! Детали вашей покупки отправляются.",
+        "crypto_purchase_failed": "Оплата не удалась/истекла. Ваши товары больше не зарезервированы.",
+        "basket_pay_too_low": "Сумма корзины {basket_total} EUR ниже минимальной для {currency}.",
+        "balance_changed_error": "❌ Транзакция не удалась: Ваш баланс изменился. Пожалуйста, проверьте баланс и попробуйте снова.",
+        "order_failed_all_sold_out_balance": "❌ Заказ не удался: Все товары в вашей корзине стали недоступны во время обработки. Средства с вашего баланса не списаны.",
+        "error_processing_purchase_contact_support": "❌ Произошла ошибка при обработке вашей покупки. Обратитесь в службу поддержки.",
+        "purchase_success": "🎉 Покупка завершена!",
+        "sold_out_note": "⚠️ Примечание: Следующие товары стали недоступны во время обработки и не были включены: {items}. Средства за них не списаны.",
+        "leave_review_now": "Оставить отзыв сейчас",
+        "back_basket_button": "Назад в корзину",
+        "error_adding_db": "Ошибка: Проблема с базой данных при добавлении товара в корзину.",
+        "error_adding_unexpected": "Ошибка: Произошла непредвиденная проблема.",
+        "reseller_discount_label": "Скидка реселлера", # <<< NEW
+
+        # --- Discounts ---
+        "discount_no_items": "Ваша корзина пуста. Сначала добавьте товары.",
+        "enter_discount_code_prompt": "Введите ваш промокод:",
+        "enter_code_answer": "Введите код в чат.",
+        "apply_discount_button": "Применить промокод",
+        "no_code_provided": "Код не предоставлен.",
+        "discount_code_not_found": "Промокод не найден.",
+        "discount_code_inactive": "Этот промокод неактивен.",
+        "discount_code_expired": "Срок действия этого промокода истек.",
+        "invalid_code_expiry_data": "Неверные данные о сроке действия кода.",
+        "code_limit_reached": "Достигнут лимит использования кода.",
+        "internal_error_discount_type": "Внутренняя ошибка при обработке типа скидки.",
+        "db_error_validating_code": "Ошибка базы данных при проверке кода.",
+        "unexpected_error_validating_code": "Произошла непредвиденная ошибка.",
+        "code_applied_message": "Код '{code}' ({value}) применен. Скидка: -{amount} EUR",
+        "discount_applied_label": "Применена скидка",
+        "discount_value_label": "Значение",
+        "discount_removed_note": "Промокод {code} удален: {reason}",
+        "discount_removed_invalid_basket": "Скидка удалена (корзина изменилась).",
+        "remove_discount_button": "Удалить скидку",
+        "discount_removed_answer": "Скидка удалена.",
+        "no_discount_answer": "Скидка не применена.",
+        "send_text_please": "Пожалуйста, отправьте промокод текстом.",
+        "error_calculating_total": "Ошибка при расчете суммы.",
+        "returning_to_basket": "Возвращаемся в корзину.",
+        "basket_empty_no_discount": "Корзина пуста. Невозможно применить промокод.",
+
+        # --- Profile & History ---
+        "profile_title": "Ваш профиль",
+        "purchase_history_button": "История покупок",
+        "back_profile_button": "Назад в профиль",
+        "purchase_history_title": "История покупок",
+        "no_purchases_yet": "Вы еще не совершали покупок.",
+        "recent_purchases_title": "Ваши недавние покупки",
+        "error_loading_profile": "❌ Ошибка: Не удалось загрузить данные профиля.",
+
+        # --- Language ---
+        "language_set_answer": "Язык установлен на {lang}!",
+        "error_saving_language": "Ошибка сохранения настроек языка.",
+        "invalid_language_answer": "Выбран неверный язык.",
+        "language": "🌐 Язык", # Menu title
+
+        # --- Price List ---
+        "no_cities_for_prices": "Нет доступных городов для просмотра цен.",
+        "price_list_title": "Прайс-лист",
+        "select_city_prices_prompt": "Выберите город для просмотра доступных товаров и цен:",
+        "price_list_title_city": "Прайс-лист: {city_name}",
+        "no_products_in_city": "В этом городе в настоящее время нет доступных товаров.",
+        "back_city_list_button": "Назад к списку городов",
+        "message_truncated_note": "Сообщение усечено из-за ограничения длины. Используйте 'Магазин' для полной информации.",
+        "error_loading_prices_db": "Ошибка: Не удалось загрузить прайс-лист для {city_name}",
+        "error_displaying_prices": "Ошибка отображения прайс-листа.",
+        "error_unexpected_prices": "Ошибка: Произошла непредвиденная проблема при создании прайс-листа.",
+        "available_label": "доступно", # Used in price list
+
+        # --- Reviews ---
+        "reviews": "📝 Меню отзывов",
+        "view_reviews_button": "Посмотреть отзывы",
+        "leave_review_button": "Оставить отзыв",
+        "enter_review_prompt": "Пожалуйста, введите текст вашего отзыва и отправьте его.",
+        "enter_review_answer": "Введите ваш отзыв в чат.",
+        "send_text_review_please": "Пожалуйста, отправьте отзыв только текстом.",
+        "review_not_empty": "Отзыв не может быть пустым. Попробуйте снова или отмените.",
+        "review_too_long": "Отзыв слишком длинный (макс. 1000 символов). Пожалуйста, сократите его.",
+        "review_thanks": "Спасибо за ваш отзыв! Ваше мнение помогает нам стать лучше.",
+        "error_saving_review_db": "Ошибка: Не удалось сохранить ваш отзыв из-за проблемы с базой данных.",
+        "error_saving_review_unexpected": "Ошибка: Произошла непредвиденная проблема при сохранении вашего отзыва.",
+        "user_reviews_title": "Отзывы пользователей",
+        "no_reviews_yet": "Отзывов пока нет.",
+        "no_more_reviews": "Больше отзывов нет.",
+        "prev_button": "Пред.",
+        "next_button": "След.",
+        "back_review_menu_button": "Назад в Меню Отзывов",
+        "unknown_date_label": "Неизвестная дата",
+        "error_displaying_review": "Ошибка отображения отзыва",
+        "error_updating_review_list": "Ошибка обновления списка отзывов.",
+
+        # --- Refill / NOWPayments ---
+        "payment_amount_too_low_api": "❌ Сумма Платежа Слишком Мала: Эквивалент {target_eur_amount} EUR в {currency} \\({crypto_amount}\\) ниже минимума, требуемого платежной системой \\({min_amount} {currency}\\)\\. Попробуйте большую сумму EUR\\.",
+        "error_min_amount_fetch": "❌ Ошибка: Не удалось получить минимальную сумму платежа для {currency}\\. Попробуйте позже или выберите другую валюту\\.",
+        "invoice_title_refill": "*Счет на Пополнение Создан*",
+        "invoice_title_purchase": "*Счет на Оплату Создан*",
+        "min_amount_label": "*Минимальная Сумма:*",
+        "payment_address_label": "*Адрес для Оплаты:*",
+        "amount_label": "*Сумма:*",
+        "expires_at_label": "*Истекает в:*",
+        "send_warning_template": "⚠️ *Важно:* Отправьте *точно* эту сумму {asset} на этот адрес\\.",
+        "overpayment_note": "ℹ️ _Отправка большей суммы допустима\\! Ваш баланс будет пополнен на основе полученной суммы после подтверждения сети\\._",
+        "confirmation_note": "✅ Подтверждение автоматическое через вебхук после подтверждения сети\\.",
+        "error_estimate_failed": "❌ Ошибка: Не удалось оценить сумму в криптовалюте. Попробуйте снова или выберите другую валюту.",
+        "error_estimate_currency_not_found": "❌ Ошибка: Валюта {currency} не поддерживается для оценки. Выберите другую валюту.",
+        "crypto_payment_disabled": "Пополнение баланса в данный момент отключено.",
+        "top_up_title": "Пополнить баланс",
+        "enter_refill_amount_prompt": "Ответьте суммой в EUR, которую вы хотите добавить на баланс (например, 10 или 25.50).",
+        "min_top_up_note": "Минимальное пополнение: {amount} EUR",
+        "enter_amount_answer": "Введите сумму пополнения.",
+        "send_amount_as_text": "Отправьте сумму текстом (например, 10 или 25.50).",
+        "amount_too_low_msg": "Сумма слишком мала. Минимальное пополнение {amount} EUR. Введите большую сумму.",
+        "amount_too_high_msg": "Сумма слишком велика. Введите меньшую сумму.",
+        "invalid_amount_format_msg": "Неверный формат суммы. Введите число (например, 10 или 25.50).",
+        "unexpected_error_msg": "Произошла непредвиденная ошибка. Попробуйте позже.",
+        "choose_crypto_prompt": "Вы хотите пополнить на {amount} EUR. Пожалуйста, выберите криптовалюту для оплаты:",
+        "cancel_top_up_button": "Отменить пополнение",
+        "preparing_invoice": "⏳ Подготовка счета на оплату...",
+        "failed_invoice_creation": "❌ Не удалось создать счет на оплату. Это может быть временная проблема с платежной системой или проблема с ключом API. Попробуйте позже или обратитесь в поддержку.",
+        "error_preparing_payment": "❌ Произошла ошибка при подготовке данных для оплаты. Попробуйте позже.",
+        "top_up_success_title": "✅ Баланс Успешно Пополнен!",
+        "amount_added_label": "Добавлено",
+        "new_balance_label": "Ваш новый баланс",
+        "error_nowpayments_api": "❌ Ошибка API Платежей: Не удалось создать платеж. Попробуйте позже или обратитесь в поддержку.",
+        "error_invalid_nowpayments_response": "❌ Ошибка API Платежей: Получен неверный ответ. Обратитесь в поддержку.",
+        "error_nowpayments_api_key": "❌ Ошибка API Платежей: Неверный ключ API. Обратитесь в поддержку.",
+        "payment_pending_db_error": "❌ Ошибка Базы Данных: Не удалось записать ожидающий платеж. Обратитесь в поддержку.",
+        "payment_cancelled_or_expired": "Статус Платежа: Ваш платеж ({payment_id}) был отменен или истек.",
+        "webhook_processing_error": "Ошибка Webhook: Не удалось обработать обновление платежа {payment_id}.",
+        "webhook_db_update_failed": "Критическая Ошибка: Платеж {payment_id} подтвержден, но обновление баланса в БД для пользователя {user_id} не удалось. Требуется ручное вмешательство.",
+        "webhook_pending_not_found": "Предупреждение Webhook: Получено обновление для ID платежа {payment_id}, но в БД не найден ожидающий депозит.",
+        "webhook_price_fetch_error": "Ошибка Webhook: Не удалось получить цену {currency} для подтверждения значения EUR для платежа {payment_id}.",
     }
 }
 # ==============================================================
 # ===== ^ ^ ^ ^ ^      LANGUAGE DICTIONARY     ^ ^ ^ ^ ^ ======
 # ==============================================================
 
-DEFAULT_WELCOME_MESSAGE = LANGUAGES['en']['welcome'] # Hardcoded fallback
+# <<< Default Welcome Message (Fallback) >>>
+DEFAULT_WELCOME_MESSAGE = LANGUAGES['en']['welcome']
+
 MIN_DEPOSIT_EUR = Decimal('5.00') # Minimum deposit amount in EUR
 NOWPAYMENTS_API_URL = "https://api.nowpayments.io"
-FEE_ADJUSTMENT = Decimal('1.0') # Default 1.0 means no adjustment
+COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
+FEE_ADJUSTMENT = Decimal('1.0')
 
 # --- Global Data Variables ---
 CITIES = {}
 DISTRICTS = {}
 PRODUCT_TYPES = {}
 DEFAULT_PRODUCT_EMOJI = "💎" # Fallback emoji
-SIZES = ["2g", "5g"] # Predefined sizes (can be changed)
-BOT_MEDIA = {'type': None, 'path': None} # Stores current bot media info
-min_amount_cache = {} # Cache for NOWPayments minimum amounts
-CACHE_EXPIRY_SECONDS = 900 # Cache expiry for min amounts (15 minutes)
+SIZES = ["2g", "5g"]
+BOT_MEDIA = {'type': None, 'path': None}
+currency_price_cache = {}
+min_amount_cache = {}
+CACHE_EXPIRY_SECONDS = 900
 
 # --- Database Connection Helper ---
 def get_db_connection():
@@ -456,21 +878,18 @@ def get_db_connection():
         if db_dir:
             try: os.makedirs(db_dir, exist_ok=True)
             except OSError as e: logger.warning(f"Could not create DB dir {db_dir}: {e}")
-        conn = sqlite3.connect(DATABASE_PATH, timeout=10) # 10-second timeout
-        conn.execute("PRAGMA foreign_keys = ON;") # Enforce foreign key constraints
-        conn.row_factory = sqlite3.Row # Access columns by name
+        conn = sqlite3.connect(DATABASE_PATH, timeout=10)
+        conn.execute("PRAGMA foreign_keys = ON;")
+        conn.row_factory = sqlite3.Row
         return conn
     except sqlite3.Error as e:
         logger.critical(f"CRITICAL ERROR connecting to database at {DATABASE_PATH}: {e}")
-        return None # Return None to indicate connection failure
-    except Exception as e: # Catch potential permission errors etc.
-        logger.critical(f"CRITICAL UNEXPECTED ERROR connecting to database at {DATABASE_PATH}: {e}", exc_info=True)
-        return None
+        raise SystemExit(f"Failed to connect to database: {e}")
 
 
 # --- Database Initialization ---
 def init_db():
-    """Initializes the database schema, including reseller tables."""
+    """Initializes the database schema."""
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -480,37 +899,70 @@ def init_db():
                 total_purchases INTEGER DEFAULT 0, basket TEXT DEFAULT '',
                 language TEXT DEFAULT 'en', theme TEXT DEFAULT 'default',
                 is_banned INTEGER DEFAULT 0,
-                is_reseller INTEGER DEFAULT 0 -- Added reseller flag
+                is_reseller INTEGER DEFAULT 0 -- <<< ADDED is_reseller column
             )''')
-            # Add is_banned column if it doesn't exist (idempotent check)
+            # Add is_banned column if missing (safer check)
             try: c.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
-            except sqlite3.OperationalError as e:
-                 if "duplicate column name: is_banned" not in str(e): raise
-            # Add is_reseller column if it doesn't exist (idempotent check)
-            try: c.execute("ALTER TABLE users ADD COLUMN is_reseller INTEGER DEFAULT 0")
-            except sqlite3.OperationalError as e:
-                 if "duplicate column name: is_reseller" not in str(e): raise
+            except sqlite3.OperationalError as alter_e: pass
+            # <<< ADDED: Add is_reseller column if missing (safer check) >>>
+            try:
+                c.execute("ALTER TABLE users ADD COLUMN is_reseller INTEGER DEFAULT 0")
+                logger.info("Added 'is_reseller' column to users table.")
+            except sqlite3.OperationalError as alter_e:
+                 if "duplicate column name: is_reseller" in str(alter_e): pass # Ignore if already exists
+                 else: raise # Reraise other errors
+            # <<< END ADDED >>>
 
-            # --- cities, districts, product_types ---
-            c.execute('CREATE TABLE IF NOT EXISTS cities (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)')
-            c.execute('CREATE TABLE IF NOT EXISTS districts (id INTEGER PRIMARY KEY AUTOINCREMENT, city_id INTEGER NOT NULL, name TEXT NOT NULL, FOREIGN KEY(city_id) REFERENCES cities(id) ON DELETE CASCADE, UNIQUE (city_id, name))')
-            c.execute(f'CREATE TABLE IF NOT EXISTS product_types (name TEXT PRIMARY KEY NOT NULL, emoji TEXT DEFAULT "{DEFAULT_PRODUCT_EMOJI}", description TEXT)')
-            # Add emoji column idempotently
+            # cities table
+            c.execute('''CREATE TABLE IF NOT EXISTS cities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL
+            )''')
+            # districts table
+            c.execute('''CREATE TABLE IF NOT EXISTS districts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, city_id INTEGER NOT NULL, name TEXT NOT NULL,
+                FOREIGN KEY(city_id) REFERENCES cities(id) ON DELETE CASCADE, UNIQUE (city_id, name)
+            )''')
+            # product_types table
+            c.execute(f'''CREATE TABLE IF NOT EXISTS product_types (
+                name TEXT PRIMARY KEY NOT NULL,
+                emoji TEXT DEFAULT '{DEFAULT_PRODUCT_EMOJI}',
+                description TEXT
+            )''')
+            # Add emoji column if missing
             try: c.execute(f"ALTER TABLE product_types ADD COLUMN emoji TEXT DEFAULT '{DEFAULT_PRODUCT_EMOJI}'")
-            except sqlite3.OperationalError as e:
-                if "duplicate column name: emoji" not in str(e): raise
-            # Add description column idempotently
+            except sqlite3.OperationalError as alter_e: pass
+            # Add description column if missing
             try: c.execute("ALTER TABLE product_types ADD COLUMN description TEXT")
-            except sqlite3.OperationalError as e:
-                if "duplicate column name: description" not in str(e): raise
+            except sqlite3.OperationalError as alter_e: pass
 
-            # --- products, product_media, purchases, reviews ---
-            c.execute('CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, city TEXT NOT NULL, district TEXT NOT NULL, product_type TEXT NOT NULL, size TEXT NOT NULL, name TEXT NOT NULL, price REAL NOT NULL, available INTEGER DEFAULT 1, reserved INTEGER DEFAULT 0, original_text TEXT, added_by INTEGER, added_date TEXT)')
-            c.execute('CREATE TABLE IF NOT EXISTS product_media (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL, media_type TEXT NOT NULL, file_path TEXT UNIQUE NOT NULL, telegram_file_id TEXT, FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE)')
-            c.execute('CREATE TABLE IF NOT EXISTS purchases (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, product_id INTEGER, product_name TEXT NOT NULL, product_type TEXT NOT NULL, product_size TEXT NOT NULL, price_paid REAL NOT NULL, city TEXT NOT NULL, district TEXT NOT NULL, purchase_date TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(user_id), FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE SET NULL)')
-            c.execute('CREATE TABLE IF NOT EXISTS reviews (review_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, review_text TEXT NOT NULL, review_date TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE)')
-
-            # --- discount_codes (General codes) ---
+            # products table
+            c.execute('''CREATE TABLE IF NOT EXISTS products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, city TEXT NOT NULL, district TEXT NOT NULL,
+                product_type TEXT NOT NULL, size TEXT NOT NULL, name TEXT NOT NULL, price REAL NOT NULL,
+                available INTEGER DEFAULT 1, reserved INTEGER DEFAULT 0, original_text TEXT,
+                added_by INTEGER, added_date TEXT
+            )''')
+            # product_media table
+            c.execute('''CREATE TABLE IF NOT EXISTS product_media (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL, file_path TEXT UNIQUE NOT NULL, telegram_file_id TEXT,
+                FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
+            )''')
+            # purchases table
+            c.execute('''CREATE TABLE IF NOT EXISTS purchases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, product_id INTEGER,
+                product_name TEXT NOT NULL, product_type TEXT NOT NULL, product_size TEXT NOT NULL,
+                price_paid REAL NOT NULL, city TEXT NOT NULL, district TEXT NOT NULL, purchase_date TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(user_id),
+                FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE SET NULL
+            )''')
+            # reviews table
+            c.execute('''CREATE TABLE IF NOT EXISTS reviews (
+                review_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
+                review_text TEXT NOT NULL, review_date TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )''')
+            # discount_codes table
             c.execute('''CREATE TABLE IF NOT EXISTS discount_codes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE NOT NULL,
                 discount_type TEXT NOT NULL CHECK(discount_type IN ('percentage', 'fixed')),
@@ -518,114 +970,84 @@ def init_db():
                 max_uses INTEGER DEFAULT NULL, uses_count INTEGER DEFAULT 0,
                 created_date TEXT NOT NULL, expiry_date TEXT DEFAULT NULL
             )''')
-
-            # --- pending_deposits ---
+            # pending_deposits table
             c.execute('''CREATE TABLE IF NOT EXISTS pending_deposits (
-                payment_id TEXT PRIMARY KEY NOT NULL,
-                user_id INTEGER NOT NULL,
-                currency TEXT NOT NULL,
-                target_eur_amount REAL NOT NULL,
-                expected_crypto_amount REAL NOT NULL,
-                created_at TEXT NOT NULL,
-                is_purchase INTEGER DEFAULT 0,
-                basket_snapshot_json TEXT DEFAULT NULL,
+                payment_id TEXT PRIMARY KEY NOT NULL, user_id INTEGER NOT NULL,
+                currency TEXT NOT NULL, target_eur_amount REAL NOT NULL,
+                expected_crypto_amount REAL NOT NULL, created_at TEXT NOT NULL,
+                is_purchase INTEGER DEFAULT 0, basket_snapshot_json TEXT DEFAULT NULL,
                 discount_code_used TEXT DEFAULT NULL,
                 FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )''')
-            # Add columns idempotently
+            # Add columns to pending_deposits if missing
             pending_cols = [col[1] for col in c.execute("PRAGMA table_info(pending_deposits)").fetchall()]
-            if 'expected_crypto_amount' not in pending_cols:
-                try: c.execute("ALTER TABLE pending_deposits ADD COLUMN expected_crypto_amount REAL NOT NULL DEFAULT 0.0") # Add default
-                except sqlite3.OperationalError as e:
-                    if "duplicate column name: expected_crypto_amount" not in str(e): raise
-            if 'is_purchase' not in pending_cols:
-                try: c.execute("ALTER TABLE pending_deposits ADD COLUMN is_purchase INTEGER DEFAULT 0")
-                except sqlite3.OperationalError as e:
-                    if "duplicate column name: is_purchase" not in str(e): raise
-            if 'basket_snapshot_json' not in pending_cols:
-                try: c.execute("ALTER TABLE pending_deposits ADD COLUMN basket_snapshot_json TEXT DEFAULT NULL")
-                except sqlite3.OperationalError as e:
-                    if "duplicate column name: basket_snapshot_json" not in str(e): raise
-            if 'discount_code_used' not in pending_cols:
-                try: c.execute("ALTER TABLE pending_deposits ADD COLUMN discount_code_used TEXT DEFAULT NULL")
-                except sqlite3.OperationalError as e:
-                    if "duplicate column name: discount_code_used" not in str(e): raise
+            if 'is_purchase' not in pending_cols: c.execute("ALTER TABLE pending_deposits ADD COLUMN is_purchase INTEGER DEFAULT 0")
+            if 'basket_snapshot_json' not in pending_cols: c.execute("ALTER TABLE pending_deposits ADD COLUMN basket_snapshot_json TEXT DEFAULT NULL")
+            if 'discount_code_used' not in pending_cols: c.execute("ALTER TABLE pending_deposits ADD COLUMN discount_code_used TEXT DEFAULT NULL")
 
+            # Admin Log table
+            c.execute('''CREATE TABLE IF NOT EXISTS admin_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL, admin_id INTEGER NOT NULL, target_user_id INTEGER,
+                action TEXT NOT NULL, reason TEXT, amount_change REAL DEFAULT NULL,
+                old_value TEXT, new_value TEXT
+            )''')
+            # Bot Settings table
+            c.execute('''CREATE TABLE IF NOT EXISTS bot_settings (
+                setting_key TEXT PRIMARY KEY NOT NULL, setting_value TEXT
+            )''')
+            # Welcome Messages table
+            c.execute('''CREATE TABLE IF NOT EXISTS welcome_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL,
+                template_text TEXT NOT NULL, description TEXT
+            )''')
+            # Add description column if missing
+            try: c.execute("ALTER TABLE welcome_messages ADD COLUMN description TEXT")
+            except sqlite3.OperationalError as alter_e: pass
 
-            # --- reseller_discounts table ---
+            # <<< ADDED: reseller_discounts table >>>
             c.execute('''CREATE TABLE IF NOT EXISTS reseller_discounts (
                 reseller_user_id INTEGER NOT NULL,
                 product_type TEXT NOT NULL,
-                discount_percentage REAL NOT NULL CHECK(discount_percentage >= 0 AND discount_percentage <= 100),
+                discount_percentage REAL NOT NULL CHECK (discount_percentage >= 0 AND discount_percentage <= 100),
                 PRIMARY KEY (reseller_user_id, product_type),
-                FOREIGN KEY(reseller_user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-                FOREIGN KEY(product_type) REFERENCES product_types(name) ON DELETE CASCADE
+                FOREIGN KEY (reseller_user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+                FOREIGN KEY (product_type) REFERENCES product_types(name) ON DELETE CASCADE
             )''')
+            # <<< END ADDED >>>
 
-            # --- admin_log table ---
-            c.execute('''CREATE TABLE IF NOT EXISTS admin_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                admin_id INTEGER NOT NULL,
-                target_user_id INTEGER,
-                action TEXT NOT NULL,
-                reason TEXT,
-                amount_change REAL DEFAULT NULL,
-                old_value TEXT,
-                new_value TEXT
-            )''')
-
-            # --- bot_settings table ---
-            c.execute('''CREATE TABLE IF NOT EXISTS bot_settings (
-                setting_key TEXT PRIMARY KEY NOT NULL,
-                setting_value TEXT
-            )''')
-            c.execute("INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
-                      ("active_welcome_message_name", "default"))
-
-            # --- welcome_messages table ---
-            c.execute('''CREATE TABLE IF NOT EXISTS welcome_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                template_text TEXT NOT NULL,
-                description TEXT
-            )''')
-            try: c.execute("ALTER TABLE welcome_messages ADD COLUMN description TEXT")
-            except sqlite3.OperationalError as e:
-                if "duplicate column name: description" not in str(e): raise
+            # Insert initial welcome messages (only if table was just created or empty - handled by INSERT OR IGNORE)
+            initial_templates = [ ("default", LANGUAGES['en']['welcome'], "Built-in default message (EN)"), # ... other templates ... ]
+            for name, text, desc in initial_templates:
+                c.execute("INSERT OR IGNORE INTO welcome_messages (name, template_text, description) VALUES (?, ?, ?)", (name, text, desc))
+            c.execute("INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)", ("active_welcome_message_name", "default"))
 
             # Create Indices
-            indices = [
-                "CREATE INDEX IF NOT EXISTS idx_product_media_product_id ON product_media(product_id)",
-                "CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases(purchase_date)",
-                "CREATE INDEX IF NOT EXISTS idx_purchases_user ON purchases(user_id)",
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_districts_city_name ON districts(city_id, name)",
-                "CREATE INDEX IF NOT EXISTS idx_products_location_type ON products(city, district, product_type)",
-                "CREATE INDEX IF NOT EXISTS idx_reviews_user ON reviews(user_id)",
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_discount_code_unique ON discount_codes(code)",
-                "CREATE INDEX IF NOT EXISTS idx_pending_deposits_user_id ON pending_deposits(user_id)",
-                "CREATE INDEX IF NOT EXISTS idx_admin_log_timestamp ON admin_log(timestamp)",
-                "CREATE INDEX IF NOT EXISTS idx_users_banned ON users(is_banned)",
-                "CREATE INDEX IF NOT EXISTS idx_pending_deposits_is_purchase ON pending_deposits(is_purchase)",
-                "CREATE INDEX IF NOT EXISTS idx_users_reseller ON users(is_reseller)", # Added
-                "CREATE INDEX IF NOT EXISTS idx_reseller_discounts_user ON reseller_discounts(reseller_user_id)", # Added
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_welcome_message_name ON welcome_messages(name)" # Added
-            ]
-            for index_sql in indices:
-                c.execute(index_sql)
+            c.execute("CREATE INDEX IF NOT EXISTS idx_product_media_product_id ON product_media(product_id)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases(purchase_date)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_purchases_user ON purchases(user_id)")
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_districts_city_name ON districts(city_id, name)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_products_location_type ON products(city, district, product_type)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_reviews_user ON reviews(user_id)")
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_discount_code_unique ON discount_codes(code)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_pending_deposits_user_id ON pending_deposits(user_id)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_admin_log_timestamp ON admin_log(timestamp)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_users_banned ON users(is_banned)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_pending_deposits_is_purchase ON pending_deposits(is_purchase)")
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_welcome_message_name ON welcome_messages(name)")
+            # <<< ADDED Indices for reseller >>>
+            c.execute("CREATE INDEX IF NOT EXISTS idx_users_is_reseller ON users(is_reseller)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_reseller_discounts_user_id ON reseller_discounts(reseller_user_id)")
+            # <<< END ADDED >>>
 
             conn.commit()
-            logger.info(f"Database schema at {DATABASE_PATH} initialized/verified successfully (incl. reseller tables/columns).")
+            logger.info(f"Database schema at {DATABASE_PATH} initialized/verified successfully.")
     except sqlite3.Error as e:
         logger.critical(f"CRITICAL ERROR: Database initialization failed for {DATABASE_PATH}: {e}", exc_info=True)
         raise SystemExit("Database initialization failed.")
-    except Exception as e:
-        logger.critical(f"CRITICAL UNEXPECTED ERROR during DB init: {e}", exc_info=True)
-        raise SystemExit("Unexpected error during DB initialization.")
 
 
-# --- Pending Deposit DB Helpers (Synchronous - Modified for Purchase Context) ---
-# Kept as is from previous version (no changes needed here for resellers)
+# --- Pending Deposit DB Helpers (Synchronous - Modified) ---
 def add_pending_deposit(payment_id: str, user_id: int, currency: str, target_eur_amount: float, expected_crypto_amount: float, is_purchase: bool = False, basket_snapshot: list | None = None, discount_code: str | None = None):
     basket_json = json.dumps(basket_snapshot) if basket_snapshot else None
     try:
@@ -657,6 +1079,7 @@ def get_pending_deposit(payment_id: str):
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
+            # Fetch all needed columns, including the new ones
             c.execute("""
                 SELECT user_id, currency, target_eur_amount, expected_crypto_amount,
                        is_purchase, basket_snapshot_json, discount_code_used
@@ -665,22 +1088,36 @@ def get_pending_deposit(payment_id: str):
             row = c.fetchone()
             if row:
                 row_dict = dict(row)
+                # Handle potential NULL for expected amount
                 if row_dict.get('expected_crypto_amount') is None:
+                    logger.warning(f"Pending deposit {payment_id} has NULL expected_crypto_amount. Using 0.0.")
                     row_dict['expected_crypto_amount'] = 0.0
+                # Deserialize basket snapshot if present
                 if row_dict.get('basket_snapshot_json'):
-                    try: row_dict['basket_snapshot'] = json.loads(row_dict['basket_snapshot_json'])
-                    except json.JSONDecodeError: row_dict['basket_snapshot'] = None
-                else: row_dict['basket_snapshot'] = None
+                    try:
+                        row_dict['basket_snapshot'] = json.loads(row_dict['basket_snapshot_json'])
+                    except json.JSONDecodeError:
+                        logger.error(f"Failed to decode basket_snapshot_json for payment {payment_id}.")
+                        row_dict['basket_snapshot'] = None # Indicate error or empty
+                else:
+                    row_dict['basket_snapshot'] = None
                 return row_dict
-            else: return None
+            else:
+                return None
     except sqlite3.Error as e:
         logger.error(f"DB error fetching pending deposit {payment_id}: {e}", exc_info=True)
         return None
 
+# --- HELPER TO UNRESERVE ITEMS (Synchronous) ---
 def _unreserve_basket_items(basket_snapshot: list | None):
-    if not basket_snapshot: return
+    """Helper to decrement reserved counts for items in a snapshot."""
+    if not basket_snapshot:
+        return
+
     product_ids_to_release_counts = Counter(item['product_id'] for item in basket_snapshot)
-    if not product_ids_to_release_counts: return
+    if not product_ids_to_release_counts:
+        return
+
     conn = None
     try:
         conn = get_db_connection()
@@ -689,15 +1126,17 @@ def _unreserve_basket_items(basket_snapshot: list | None):
         decrement_data = [(count, pid) for pid, count in product_ids_to_release_counts.items()]
         c.executemany("UPDATE products SET reserved = MAX(0, reserved - ?) WHERE id = ?", decrement_data)
         conn.commit()
-        logger.info(f"Un-reserved {sum(product_ids_to_release_counts.values())} items due to failed/expired payment.")
+        total_released = sum(product_ids_to_release_counts.values())
+        logger.info(f"Un-reserved {total_released} items due to failed/expired basket payment.")
     except sqlite3.Error as e:
         logger.error(f"DB error un-reserving items: {e}", exc_info=True)
         if conn and conn.in_transaction: conn.rollback()
     finally:
         if conn: conn.close()
 
-def remove_pending_deposit(payment_id: str, trigger: str = "unknown"):
-    pending_info = get_pending_deposit(payment_id)
+# --- REMOVE PENDING DEPOSIT (Modified to handle un-reserving) ---
+def remove_pending_deposit(payment_id: str, trigger: str = "unknown"): # Added trigger for logging
+    pending_info = get_pending_deposit(payment_id) # Get info *before* deleting
     deleted = False
     conn = None
     try:
@@ -706,19 +1145,23 @@ def remove_pending_deposit(payment_id: str, trigger: str = "unknown"):
         result = c.execute("DELETE FROM pending_deposits WHERE payment_id = ?", (payment_id,))
         conn.commit()
         deleted = result.rowcount > 0
-        if deleted: logger.info(f"Removed pending deposit record for payment ID: {payment_id} (Trigger: {trigger})")
-        else: logger.info(f"No pending deposit record found to remove for payment ID: {payment_id} (Trigger: {trigger})")
+        if deleted:
+            logger.info(f"Removed pending deposit record for payment ID: {payment_id} (Trigger: {trigger})")
+        else:
+            logger.info(f"No pending deposit record found to remove for payment ID: {payment_id} (Trigger: {trigger})")
     except sqlite3.Error as e:
         logger.error(f"DB error removing pending deposit {payment_id} (Trigger: {trigger}): {e}", exc_info=True)
-        return False
-    if deleted and pending_info and pending_info.get('is_purchase') == 1 and trigger in ["failure", "expiry", "cancel", "underpaid", "zero_credit", "currency_mismatch"]:
-        logger.info(f"Payment {payment_id} was a direct purchase that failed/expired/cancelled/invalid. Attempting to un-reserve items.")
+        return False # Indicate failure
+
+    # If deletion was successful AND it was a purchase AND it was triggered by failure/expiry/cancel
+    if deleted and pending_info and pending_info.get('is_purchase') == 1 and trigger in ["failure", "expiry", "cancel"]:
+        logger.info(f"Payment {payment_id} was a direct purchase that failed/expired/cancelled. Attempting to un-reserve items.")
         _unreserve_basket_items(pending_info.get('basket_snapshot'))
+
     return deleted
 
 
 # --- Data Loading Functions (Synchronous) ---
-# Kept as is from previous version
 def load_cities():
     cities_data = {}
     try:
@@ -727,13 +1170,13 @@ def load_cities():
     return cities_data
 
 def load_districts():
-    districts_data = defaultdict(dict)
+    districts_data = {}
     try:
         with get_db_connection() as conn:
             c = conn.cursor(); c.execute("SELECT d.city_id, d.id, d.name FROM districts d ORDER BY d.city_id, d.name")
-            for row in c.fetchall(): districts_data[str(row['city_id'])][str(row['id'])] = row['name']
+            for row in c.fetchall(): city_id_str = str(row['city_id']); districts_data.setdefault(city_id_str, {})[str(row['id'])] = row['name']
     except sqlite3.Error as e: logger.error(f"Failed to load districts: {e}")
-    return dict(districts_data)
+    return districts_data
 
 def load_product_types():
     product_types_dict = {}
@@ -747,23 +1190,25 @@ def load_product_types():
     return product_types_dict
 
 def load_all_data():
+    """Loads all dynamic data, modifying global variables IN PLACE."""
     global CITIES, DISTRICTS, PRODUCT_TYPES
     logger.info("Starting load_all_data (in-place update)...")
     try:
         cities_data = load_cities()
         districts_data = load_districts()
         product_types_dict = load_product_types()
+
         CITIES.clear(); CITIES.update(cities_data)
         DISTRICTS.clear(); DISTRICTS.update(districts_data)
         PRODUCT_TYPES.clear(); PRODUCT_TYPES.update(product_types_dict)
+
         logger.info(f"Loaded (in-place) {len(CITIES)} cities, {sum(len(d) for d in DISTRICTS.values())} districts, {len(PRODUCT_TYPES)} product types.")
     except Exception as e:
         logger.error(f"Error during load_all_data (in-place): {e}", exc_info=True)
         CITIES.clear(); DISTRICTS.clear(); PRODUCT_TYPES.clear()
 
 
-# --- Bot Media Loading ---
-# Kept as is from previous version
+# --- Bot Media Loading (from specified path on disk) ---
 if os.path.exists(BOT_MEDIA_JSON_PATH):
     try:
         with open(BOT_MEDIA_JSON_PATH, 'r') as f: BOT_MEDIA = json.load(f)
@@ -776,7 +1221,21 @@ else: logger.info(f"{BOT_MEDIA_JSON_PATH} not found. Bot starting without defaul
 
 
 # --- Utility Functions ---
-# Kept as is from previous version
+# >>> ADD _get_lang_data function here <<<
+def _get_lang_data(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, dict]:
+    """Gets the current language code and corresponding language data dictionary."""
+    lang = context.user_data.get("lang", "en")
+    # Uses LANGUAGES dict defined above in this file
+    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    if lang not in LANGUAGES:
+        logger.warning(f"_get_lang_data: Language '{lang}' not found in LANGUAGES dict. Falling back to 'en'.")
+        lang = 'en' # Ensure lang variable reflects the fallback
+
+    # Debugging is now inside the user/admin functions that call this
+    # keys_sample = list(lang_data.keys())[:5]
+    # logger.debug(f"_get_lang_data: Returning lang '{lang}' and lang_data keys sample: {keys_sample}...")
+    return lang, lang_data
+
 def format_currency(value):
     try: return f"{Decimal(str(value)):.2f}"
     except (ValueError, TypeError): logger.warning(f"Could format currency {value}"); return "0.00"
@@ -796,8 +1255,13 @@ def get_progress_bar(purchases):
     except (ValueError, TypeError): return '[⬜️⬜️⬜️⬜️⬜️]'
 
 async def send_message_with_retry(
-    bot: Bot, chat_id: int, text: str, reply_markup=None, max_retries=3,
-    parse_mode=None, disable_web_page_preview=False
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    max_retries=3,
+    parse_mode=None,
+    disable_web_page_preview=False
 ):
     for attempt in range(max_retries):
         try:
@@ -808,7 +1272,8 @@ async def send_message_with_retry(
         except telegram_error.BadRequest as e:
             logger.warning(f"BadRequest sending to {chat_id} (Attempt {attempt+1}/{max_retries}): {e}. Text: {text[:100]}...")
             if "chat not found" in str(e).lower() or "bot was blocked" in str(e).lower() or "user is deactivated" in str(e).lower():
-                logger.error(f"Unrecoverable BadRequest sending to {chat_id}: {e}. Aborting retries."); return None
+                logger.error(f"Unrecoverable BadRequest sending to {chat_id}: {e}. Aborting retries.")
+                return None
             if attempt < max_retries - 1: await asyncio.sleep(1 * (2 ** attempt)); continue
             else: logger.error(f"Max retries reached for BadRequest sending to {chat_id}: {e}"); break
         except telegram_error.RetryAfter as e:
@@ -828,7 +1293,7 @@ async def send_message_with_retry(
     logger.error(f"Failed to send message to {chat_id} after {max_retries} attempts: {text[:100]}..."); return None
 
 def get_date_range(period_key):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc) # Use UTC now
     try:
         if period_key == 'today': start = now.replace(hour=0, minute=0, second=0, microsecond=0); end = now
         elif period_key == 'yesterday': yesterday = now - timedelta(days=1); start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0); end = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
@@ -838,6 +1303,7 @@ def get_date_range(period_key):
         elif period_key == 'last_month': first_of_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0); end_of_last_month = first_of_this_month - timedelta(microseconds=1); start = end_of_last_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0); end = end_of_last_month.replace(hour=23, minute=59, second=59, microsecond=999999)
         elif period_key == 'year': start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0); end = now
         else: return None, None
+        # Return ISO format strings (already in UTC)
         return start.isoformat(), end.isoformat()
     except Exception as e: logger.error(f"Error calculating date range for '{period_key}': {e}"); return None, None
 
@@ -850,7 +1316,6 @@ def get_user_status(purchases):
         else: return "New 🌱"
     except (ValueError, TypeError): return "New 🌱"
 
-# clear_expired_basket, clear_all_expired_baskets, fetch_last_purchases, fetch_reviews kept as is
 def clear_expired_basket(context: ContextTypes.DEFAULT_TYPE, user_id: int):
     if 'basket' not in context.user_data: context.user_data['basket'] = []
     conn = None
@@ -864,48 +1329,42 @@ def clear_expired_basket(context: ContextTypes.DEFAULT_TYPE, user_id: int):
             if context.user_data.get('basket'): context.user_data['basket'] = []
             if context.user_data.get('applied_discount'): context.user_data.pop('applied_discount', None)
             c.execute("COMMIT"); return
-
         items = basket_str.split(',')
         current_time = time.time(); valid_items_str_list = []; valid_items_userdata_list = []
         expired_product_ids_counts = Counter(); expired_items_found = False
         potential_prod_ids = []
-
         for item_part in items:
             if item_part and ':' in item_part:
                 try: potential_prod_ids.append(int(item_part.split(':')[0]))
                 except ValueError: logger.warning(f"Invalid product ID format in basket string '{item_part}' for user {user_id}")
-
-        product_details = {}
+        product_prices = {}
         if potential_prod_ids:
-             unique_potential_prod_ids = list(set(potential_prod_ids))
-             placeholders = ','.join('?' * len(unique_potential_prod_ids))
-             c.execute(f"SELECT id, price, product_type FROM products WHERE id IN ({placeholders})", unique_potential_prod_ids)
-             for row in c.fetchall():
-                 product_details[row['id']] = {'price': Decimal(str(row['price'])), 'type': row['product_type']}
-
+             placeholders = ','.join('?' * len(potential_prod_ids))
+             c.execute(f"SELECT id, price, product_type FROM products WHERE id IN ({placeholders})", potential_prod_ids) # <<< ADDED product_type fetch
+             # <<< UPDATED to store dict >>>
+             product_prices = {row['id']: {'price': Decimal(str(row['price'])), 'type': row['product_type']} for row in c.fetchall()}
         for item_str in items:
             if not item_str: continue
             try:
                 prod_id_str, ts_str = item_str.split(':'); prod_id = int(prod_id_str); ts = float(ts_str)
                 if current_time - ts <= BASKET_TIMEOUT:
                     valid_items_str_list.append(item_str)
-                    if prod_id in product_details:
+                    if prod_id in product_prices:
                         valid_items_userdata_list.append({
-                            "product_id": prod_id, "price": product_details[prod_id]['price'],
-                            "timestamp": ts, "product_type": product_details[prod_id]['type']
+                            "product_id": prod_id,
+                            "price": product_prices[prod_id]['price'], # Original price
+                            "product_type": product_prices[prod_id]['type'], # <<< ADDED product_type
+                            "timestamp": ts
                         })
-                    else: logger.warning(f"P{prod_id} details not found during basket validation (user {user_id})."); expired_items_found = True
+                    else: logger.warning(f"P{prod_id} price/type not found during basket validation (user {user_id}).")
                 else: expired_product_ids_counts[prod_id] += 1; expired_items_found = True
-            except (ValueError, IndexError) as e: logger.warning(f"Malformed item '{item_str}' in basket for user {user_id}: {e}"); expired_items_found = True
-
+            except (ValueError, IndexError) as e: logger.warning(f"Malformed item '{item_str}' in basket for user {user_id}: {e}")
         if expired_items_found:
             new_basket_str = ','.join(valid_items_str_list)
             c.execute("UPDATE users SET basket = ? WHERE user_id = ?", (new_basket_str, user_id))
             if expired_product_ids_counts:
                 decrement_data = [(count, pid) for pid, count in expired_product_ids_counts.items()]
                 c.executemany("UPDATE products SET reserved = MAX(0, reserved - ?) WHERE id = ?", decrement_data)
-                logger.info(f"Released {sum(expired_product_ids_counts.values())} expired/invalid reservations for user {user_id}.")
-
         c.execute("COMMIT")
         context.user_data['basket'] = valid_items_userdata_list
         if not valid_items_userdata_list and context.user_data.get('applied_discount'):
@@ -957,30 +1416,41 @@ def fetch_reviews(offset=0, limit=5):
 
 
 # --- API Helpers ---
-# Kept as is from previous version
 def get_nowpayments_min_amount(currency_code: str) -> Decimal | None:
     currency_code_lower = currency_code.lower()
     now = time.time()
     if currency_code_lower in min_amount_cache:
         min_amount, timestamp = min_amount_cache[currency_code_lower]
-        if now - timestamp < CACHE_EXPIRY_SECONDS * 2: return min_amount
-    if not NOWPAYMENTS_API_KEY: logger.error("NOWPayments API key is missing."); return None
+        if now - timestamp < CACHE_EXPIRY_SECONDS * 2: logger.debug(f"Cache hit for {currency_code_lower} min amount: {min_amount}"); return min_amount
+    if not NOWPAYMENTS_API_KEY: logger.error("NOWPayments API key is missing, cannot fetch minimum amount."); return None
     try:
         url = f"{NOWPAYMENTS_API_URL}/v1/min-amount"; params = {'currency_from': currency_code_lower}; headers = {'x-api-key': NOWPAYMENTS_API_KEY}
+        logger.debug(f"Fetching min amount for {currency_code_lower} from {url} with params {params}")
         response = requests.get(url, params=params, headers=headers, timeout=10)
+        logger.debug(f"NOWPayments min-amount response status: {response.status_code}, content: {response.text[:200]}")
         response.raise_for_status()
         data = response.json()
-        if 'min_amount' in data and data['min_amount'] is not None:
-            min_amount = Decimal(str(data['min_amount'])); min_amount_cache[currency_code_lower] = (min_amount, now)
+        min_amount_key = 'min_amount'
+        if min_amount_key in data and data[min_amount_key] is not None:
+            min_amount = Decimal(str(data[min_amount_key])); min_amount_cache[currency_code_lower] = (min_amount, now)
+            logger.info(f"Fetched minimum amount for {currency_code_lower}: {min_amount} from NOWPayments.")
             return min_amount
-        else: return None
-    except Exception as e: logger.error(f"Error fetching NOWPayments min amount for {currency_code_lower}: {e}"); return None
+        else: logger.warning(f"Could not find '{min_amount_key}' key or it was null for {currency_code_lower} in NOWPayments response: {data}"); return None
+    except requests.exceptions.Timeout: logger.error(f"Timeout fetching minimum amount for {currency_code_lower} from NOWPayments."); return None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching minimum amount for {currency_code_lower} from NOWPayments: {e}")
+        if e.response is not None: logger.error(f"NOWPayments min-amount error response ({e.response.status_code}): {e.response.text}")
+        return None
+    except (KeyError, ValueError, json.JSONDecodeError) as e: logger.error(f"Error parsing NOWPayments min amount response for {currency_code_lower}: {e}"); return None
 
 def format_expiration_time(expiration_date_str: str | None) -> str:
     if not expiration_date_str: return "N/A"
     try:
-        if not expiration_date_str.endswith('Z') and '+' not in expiration_date_str and '-' not in expiration_date_str[10:]: expiration_date_str += 'Z'
+        # Ensure the string ends with timezone info for fromisoformat
+        if not expiration_date_str.endswith('Z') and '+' not in expiration_date_str and '-' not in expiration_date_str[10:]:
+            expiration_date_str += 'Z' # Assume UTC if no timezone
         dt_obj = datetime.fromisoformat(expiration_date_str.replace('Z', '+00:00'))
+        # Format with timezone name (like UTC)
         return dt_obj.strftime("%H:%M:%S %Z") if dt_obj.tzinfo else dt_obj.strftime("%H:%M:%S")
     except (ValueError, TypeError) as e: logger.warning(f"Could not parse expiration date string '{expiration_date_str}': {e}"); return "Invalid Date"
 
@@ -994,65 +1464,135 @@ async def handle_coming_soon(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 
 # --- Fetch User IDs for Broadcast (Synchronous) ---
-# Kept as is from previous version
 def fetch_user_ids_for_broadcast(target_type: str, target_value: str | int | None = None) -> list[int]:
+    """Fetches user IDs based on broadcast target criteria."""
     user_ids = []
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
-        base_condition = "WHERE is_banned = 0"
+
         if target_type == 'all':
-            c.execute(f"SELECT user_id FROM users {base_condition}")
+            c.execute("SELECT user_id FROM users WHERE is_banned=0") # Exclude banned users
             user_ids = [row['user_id'] for row in c.fetchall()]
+            logger.info(f"Broadcast target 'all': Found {len(user_ids)} non-banned users.")
+
         elif target_type == 'status' and target_value:
             status = str(target_value).lower()
             min_purchases, max_purchases = -1, -1
+            # Use the status string including emoji for matching (rely on English definition)
             if status == LANGUAGES['en'].get("broadcast_status_vip", "VIP 👑").lower(): min_purchases = 10; max_purchases = float('inf')
             elif status == LANGUAGES['en'].get("broadcast_status_regular", "Regular ⭐").lower(): min_purchases = 5; max_purchases = 9
             elif status == LANGUAGES['en'].get("broadcast_status_new", "New 🌱").lower(): min_purchases = 0; max_purchases = 4
+
             if min_purchases != -1:
-                 if max_purchases == float('inf'): query_sql = f"SELECT user_id FROM users {base_condition} AND total_purchases >= ?"; params_sql = (min_purchases,)
-                 else: query_sql = f"SELECT user_id FROM users {base_condition} AND total_purchases BETWEEN ? AND ?"; params_sql = (min_purchases, max_purchases)
-                 c.execute(query_sql, params_sql); user_ids = [row['user_id'] for row in c.fetchall()]
+                 if max_purchases == float('inf'):
+                     c.execute("SELECT user_id FROM users WHERE total_purchases >= ? AND is_banned=0", (min_purchases,)) # Exclude banned
+                 else:
+                     c.execute("SELECT user_id FROM users WHERE total_purchases BETWEEN ? AND ? AND is_banned=0", (min_purchases, max_purchases)) # Exclude banned
+                 user_ids = [row['user_id'] for row in c.fetchall()]
+                 logger.info(f"Broadcast target status '{target_value}': Found {len(user_ids)} non-banned users.")
+            else: logger.warning(f"Invalid status value for broadcast: {target_value}")
+
         elif target_type == 'city' and target_value:
             city_name = str(target_value)
-            c.execute(f"SELECT p1.user_id FROM purchases p1 JOIN users u ON p1.user_id = u.user_id WHERE p1.city = ? AND u.is_banned = 0 AND p1.purchase_date = (SELECT MAX(p2.purchase_date) FROM purchases p2 WHERE p1.user_id = p2.user_id)", (city_name,))
+            # Find non-banned users whose *most recent* purchase was in this city
+            c.execute("""
+                SELECT p1.user_id
+                FROM purchases p1
+                JOIN users u ON p1.user_id = u.user_id
+                WHERE p1.city = ? AND u.is_banned = 0 AND p1.purchase_date = (
+                    SELECT MAX(purchase_date)
+                    FROM purchases p2
+                    WHERE p1.user_id = p2.user_id
+                )
+            """, (city_name,))
             user_ids = [row['user_id'] for row in c.fetchall()]
+            logger.info(f"Broadcast target city '{city_name}': Found {len(user_ids)} non-banned users based on last purchase.")
+
         elif target_type == 'inactive' and target_value:
             try:
-                days_inactive = int(target_value); cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_inactive); cutoff_iso = cutoff_date.isoformat()
-                c.execute(f"SELECT p1.user_id FROM purchases p1 JOIN users u ON p1.user_id = u.user_id WHERE u.is_banned = 0 AND p1.purchase_date = (SELECT MAX(p2.purchase_date) FROM purchases p2 WHERE p1.user_id = p2.user_id) AND p1.purchase_date < ?", (cutoff_iso,))
+                days_inactive = int(target_value)
+                if days_inactive <= 0: raise ValueError("Days must be positive")
+                cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_inactive)
+                cutoff_iso = cutoff_date.isoformat()
+
+                # Find non-banned users whose last purchase date is older than the cutoff date OR have no purchases
+                # 1. Get users with last purchase older than cutoff
+                c.execute("""
+                    SELECT p1.user_id
+                    FROM purchases p1
+                    JOIN users u ON p1.user_id = u.user_id
+                    WHERE u.is_banned = 0 AND p1.purchase_date = (
+                        SELECT MAX(purchase_date)
+                        FROM purchases p2
+                        WHERE p1.user_id = p2.user_id
+                    ) AND p1.purchase_date < ?
+                """, (cutoff_iso,))
                 inactive_users = {row['user_id'] for row in c.fetchall()}
-                c.execute(f"SELECT user_id FROM users WHERE total_purchases = 0 AND is_banned = 0")
+
+                # 2. Get users with zero purchases (who implicitly meet the inactive criteria)
+                c.execute("SELECT user_id FROM users WHERE total_purchases = 0 AND is_banned = 0") # Exclude banned
                 zero_purchase_users = {row['user_id'] for row in c.fetchall()}
-                user_ids = list(inactive_users.union(zero_purchase_users))
-            except (ValueError, TypeError): logger.error(f"Invalid days for inactive broadcast: {target_value}")
-    except sqlite3.Error as e: logger.error(f"DB error fetching broadcast users: {e}", exc_info=True)
-    except Exception as e: logger.error(f"Unexpected error fetching broadcast users: {e}", exc_info=True)
+
+                # Combine the sets
+                user_ids_set = inactive_users.union(zero_purchase_users)
+                user_ids = list(user_ids_set)
+                logger.info(f"Broadcast target inactive >= {days_inactive} days: Found {len(user_ids)} non-banned users.")
+
+            except (ValueError, TypeError):
+                logger.error(f"Invalid number of days for inactive broadcast: {target_value}")
+
+        else:
+            logger.error(f"Unknown broadcast target type or missing value: type={target_type}, value={target_value}")
+
+    except sqlite3.Error as e:
+        logger.error(f"DB error fetching users for broadcast ({target_type}, {target_value}): {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Unexpected error fetching users for broadcast: {e}", exc_info=True)
     finally:
         if conn: conn.close()
-    logger.info(f"Broadcast target ({target_type}={target_value}): Found {len(user_ids)} users.")
+
     return user_ids
 
 
 # --- Admin Action Logging (Synchronous) ---
-# Kept as is from previous version
+# <<< Define action names for Reseller Management >>>
+ACTION_RESELLER_ENABLED = "RESELLER_ENABLED"
+ACTION_RESELLER_DISABLED = "RESELLER_DISABLED"
+ACTION_RESELLER_DISCOUNT_ADD = "RESELLER_DISCOUNT_ADD"
+ACTION_RESELLER_DISCOUNT_EDIT = "RESELLER_DISCOUNT_EDIT"
+ACTION_RESELLER_DISCOUNT_DELETE = "RESELLER_DISCOUNT_DELETE"
+# <<< END Define >>>
+
 def log_admin_action(admin_id: int, action: str, target_user_id: int | None = None, reason: str | None = None, amount_change: float | None = None, old_value=None, new_value=None):
+    """Logs an administrative action to the admin_log table."""
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute("""
                 INSERT INTO admin_log (timestamp, admin_id, target_user_id, action, reason, amount_change, old_value, new_value)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (datetime.now(timezone.utc).isoformat(), admin_id, target_user_id, action, reason, amount_change, str(old_value) if old_value is not None else None, str(new_value) if new_value is not None else None))
+            """, (
+                datetime.now(timezone.utc).isoformat(),
+                admin_id,
+                target_user_id,
+                action, # Ensure action string is passed correctly
+                reason,
+                amount_change,
+                str(old_value) if old_value is not None else None,
+                str(new_value) if new_value is not None else None
+            ))
             conn.commit()
             logger.info(f"Admin Action Logged: Admin={admin_id}, Action='{action}', Target={target_user_id}, Reason='{reason}', Amount={amount_change}, Old='{old_value}', New='{new_value}'")
-    except Exception as e: logger.error(f"Failed to log admin action: {e}", exc_info=True)
+    except sqlite3.Error as e:
+        logger.error(f"Failed to log admin action: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Unexpected error logging admin action: {e}", exc_info=True)
 
 # --- Welcome Message Helpers (Synchronous) ---
-# Kept as is from previous version
 def load_active_welcome_message() -> str:
+    """Loads the currently active welcome message template from the database."""
     conn = None
     try:
         conn = get_db_connection()
@@ -1060,76 +1600,156 @@ def load_active_welcome_message() -> str:
         c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
         setting_row = c.fetchone()
         active_name = setting_row['setting_value'] if setting_row else "default"
+
         c.execute("SELECT template_text FROM welcome_messages WHERE name = ?", (active_name,))
         template_row = c.fetchone()
-        if template_row: return template_row['template_text']
+        if template_row:
+            logger.info(f"Loaded active welcome message template: '{active_name}'")
+            return template_row['template_text']
         else:
+            # If active template name points to a non-existent template, try fallback
+            logger.warning(f"Active welcome message template '{active_name}' not found. Trying 'default'.")
             c.execute("SELECT template_text FROM welcome_messages WHERE name = ?", ("default",))
             template_row = c.fetchone()
-            if template_row: return template_row['template_text']
-            else: return DEFAULT_WELCOME_MESSAGE
-    except Exception as e: logger.error(f"Error loading active welcome message: {e}"); return DEFAULT_WELCOME_MESSAGE
+            if template_row:
+                logger.info("Loaded fallback 'default' welcome message template.")
+                # Optionally update setting to default?
+                # c.execute("UPDATE bot_settings SET setting_value = ? WHERE setting_key = ?", ("default", "active_welcome_message_name"))
+                # conn.commit()
+                return template_row['template_text']
+            else:
+                # If even default is missing
+                logger.error("FATAL: Default welcome message template 'default' not found in DB! Using hardcoded default.")
+                return DEFAULT_WELCOME_MESSAGE
+
+    except sqlite3.Error as e:
+        logger.error(f"DB error loading active welcome message: {e}", exc_info=True)
+        return DEFAULT_WELCOME_MESSAGE
+    except Exception as e:
+        logger.error(f"Unexpected error loading welcome message: {e}", exc_info=True)
+        return DEFAULT_WELCOME_MESSAGE
     finally:
         if conn: conn.close()
 
+# <<< MODIFIED: Fetch description as well >>>
 def get_welcome_message_templates(limit: int | None = None, offset: int = 0) -> list[dict]:
+    """Fetches welcome message templates (name, text, description), optionally paginated."""
     templates = []
     try:
         with get_db_connection() as conn:
-            c = conn.cursor(); query = "SELECT name, template_text, description FROM welcome_messages ORDER BY name"
-            params = [];
-            if limit is not None: query += " LIMIT ? OFFSET ?"; params.extend([limit, offset])
-            c.execute(query, params); templates = [dict(row) for row in c.fetchall()]
-    except Exception as e: logger.error(f"DB error fetching welcome templates: {e}")
+            c = conn.cursor()
+            query = "SELECT name, template_text, description FROM welcome_messages ORDER BY name"
+            params = []
+            if limit is not None:
+                query += " LIMIT ? OFFSET ?"
+                params.extend([limit, offset])
+            c.execute(query, params)
+            templates = [dict(row) for row in c.fetchall()]
+    except sqlite3.Error as e:
+        logger.error(f"DB error fetching welcome message templates: {e}", exc_info=True)
     return templates
 
+# <<< NEW: Helper to get total count >>>
 def get_welcome_message_template_count() -> int:
+    """Gets the total number of welcome message templates."""
     count = 0
     try:
-        with get_db_connection() as conn: c = conn.cursor(); c.execute("SELECT COUNT(*) FROM welcome_messages"); result = c.fetchone(); count = result[0] if result else 0
-    except Exception as e: logger.error(f"DB error counting welcome templates: {e}")
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM welcome_messages")
+            result = c.fetchone()
+            if result: count = result[0]
+    except sqlite3.Error as e:
+        logger.error(f"DB error counting welcome message templates: {e}", exc_info=True)
     return count
 
+# <<< MODIFIED: Handle description >>>
 def add_welcome_message_template(name: str, template_text: str, description: str | None = None) -> bool:
+    """Adds a new welcome message template."""
     try:
-        with get_db_connection() as conn: c = conn.cursor(); c.execute("INSERT INTO welcome_messages (name, template_text, description) VALUES (?, ?, ?)", (name, template_text, description)); conn.commit(); return True
-    except sqlite3.IntegrityError: logger.warning(f"Duplicate welcome template name: '{name}'"); return False
-    except Exception as e: logger.error(f"DB error adding welcome template '{name}': {e}"); return False
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("INSERT INTO welcome_messages (name, template_text, description) VALUES (?, ?, ?)",
+                      (name, template_text, description))
+            conn.commit()
+            logger.info(f"Added welcome message template: '{name}'")
+            return True
+    except sqlite3.IntegrityError:
+        logger.warning(f"Attempted to add duplicate welcome message template name: '{name}'")
+        return False
+    except sqlite3.Error as e:
+        logger.error(f"DB error adding welcome message template '{name}': {e}", exc_info=True)
+        return False
 
+# <<< MODIFIED: Handle description >>>
 def update_welcome_message_template(name: str, new_template_text: str | None = None, new_description: str | None = None) -> bool:
-    if new_template_text is None and new_description is None: return False
-    updates = []; params = []
-    if new_template_text is not None: updates.append("template_text = ?"); params.append(new_template_text)
-    if new_description is not None: updates.append("description = ?"); params.append(new_description if new_description else None)
-    params.append(name); sql = f"UPDATE welcome_messages SET {', '.join(updates)} WHERE name = ?"
+    """Updates the text and/or description of an existing welcome message template."""
+    if new_template_text is None and new_description is None:
+        logger.warning("Update welcome template called without providing new text or description.")
+        return False
+    updates = []
+    params = []
+    if new_template_text is not None:
+        updates.append("template_text = ?")
+        params.append(new_template_text)
+    if new_description is not None:
+        # Handle empty string description as NULL
+        desc_to_save = new_description if new_description else None
+        updates.append("description = ?")
+        params.append(desc_to_save)
+
+    params.append(name)
+    sql = f"UPDATE welcome_messages SET {', '.join(updates)} WHERE name = ?"
+
     try:
-        with get_db_connection() as conn: c = conn.cursor(); result = c.execute(sql, params); conn.commit(); return result.rowcount > 0
-    except Exception as e: logger.error(f"DB error updating welcome template '{name}': {e}"); return False
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            result = c.execute(sql, params)
+            conn.commit()
+            if result.rowcount > 0:
+                logger.info(f"Updated welcome message template: '{name}'")
+                return True
+            else:
+                logger.warning(f"Welcome message template '{name}' not found for update.")
+                return False
+    except sqlite3.Error as e:
+        logger.error(f"DB error updating welcome message template '{name}': {e}", exc_info=True)
+        return False
 
 def delete_welcome_message_template(name: str) -> bool:
-    if name == "default": return False
+    """Deletes a welcome message template."""
     try:
         with get_db_connection() as conn:
-            c = conn.cursor(); result = c.execute("DELETE FROM welcome_messages WHERE name = ?", (name,)); conn.commit()
+            c = conn.cursor()
+            # Check if it's the active one (handled better in admin logic now)
+            result = c.execute("DELETE FROM welcome_messages WHERE name = ?", (name,))
+            conn.commit()
             if result.rowcount > 0:
-                c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
-                active_setting = c.fetchone()
-                if active_setting and active_setting['setting_value'] == name: c.execute("UPDATE bot_settings SET setting_value = ? WHERE setting_key = ?", ("default", "active_welcome_message_name")); conn.commit()
+                logger.info(f"Deleted welcome message template: '{name}'")
                 return True
-            else: return False
-    except Exception as e: logger.error(f"DB error deleting welcome template '{name}': {e}"); return False
+            else:
+                logger.warning(f"Welcome message template '{name}' not found for deletion.")
+                return False
+    except sqlite3.Error as e:
+        logger.error(f"DB error deleting welcome message template '{name}': {e}", exc_info=True)
+        return False
 
 def set_active_welcome_message(name: str) -> bool:
+    """Sets the active welcome message template name in bot_settings."""
     try:
         with get_db_connection() as conn:
-            c = conn.cursor(); c.execute("SELECT 1 FROM welcome_messages WHERE name = ?", (name,))
-            if not c.fetchone(): return False
-            c.execute("INSERT OR REPLACE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)", ("active_welcome_message_name", name)); conn.commit(); return True
-    except Exception as e: logger.error(f"DB error setting active welcome message to '{name}': {e}"); return False
-
-
-# --- Initial Data Load ---
-# init_db() # Called once in main.py
-# load_all_data() # Called once in main.py after init_db
-
-# --- END OF FILE utils.py ---
+            c = conn.cursor()
+            # First check if the template name actually exists
+            c.execute("SELECT 1 FROM welcome_messages WHERE name = ?", (name,))
+            if not c.fetchone():
+                logger.error(f"Attempted to activate non-existent welcome template: '{name}'")
+                return False
+            # Update or insert the setting
+            c.execute("INSERT OR REPLACE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
+                      ("active_welcome_message_name", name))
+            conn.commit()
+            logger.info(f"Set active welcome message template to: '{name}'")
+            return True
+    except sqlite3.Error as e:
+        logger.error(f"DB error setting active welcome message to '{name}': {e}", exc_info=True)
+        return False
