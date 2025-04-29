@@ -46,6 +46,8 @@ from utils import (
     send_message_with_retry, # Import send_message_with_retry
     log_admin_action # Import admin logging
 )
+# <<< Ensure user module is imported >>>
+import user
 from user import (
     start, handle_shop, handle_city_selection, handle_district_selection,
     handle_type_selection, handle_product_selection, handle_add_to_basket,
@@ -60,7 +62,9 @@ from user import (
     handle_apply_discount_basket_pay,
     handle_skip_discount_basket_pay,
     handle_basket_discount_code_message,
-    _show_crypto_choices_for_basket # Import the helper if needed directly (though unlikely)
+    _show_crypto_choices_for_basket, # Import the helper if needed directly (though unlikely)
+    # <<< ADDED: Import the new handler >>>
+    handle_pay_single_item
     # <<< NOTE: user.handle_confirm_pay is NOT imported here, it's called via payment.handle_confirm_pay >>>
 )
 from admin import (
@@ -199,7 +203,9 @@ def callback_query_router(func):
                 "start": start, "back_start": handle_back_start, "shop": handle_shop,
                 "city": handle_city_selection, "dist": handle_district_selection,
                 "type": handle_type_selection, "product": handle_product_selection,
-                "add": handle_add_to_basket, "view_basket": handle_view_basket,
+                "add": handle_add_to_basket,
+                "pay_single_item": user.handle_pay_single_item, # <<< CORRECTED: Added user. prefix
+                "view_basket": handle_view_basket,
                 "clear_basket": handle_clear_basket, "remove": handle_remove_from_basket,
                 "profile": handle_profile, "language": handle_language_selection,
                 "price_list": handle_price_list, "price_list_city": handle_price_list_city,
@@ -209,7 +215,7 @@ def callback_query_router(func):
                 "view_history": handle_view_history,
                 "apply_discount_start": apply_discount_start, "remove_discount": remove_discount,
                 # Basket Payment Flow Handlers
-                "confirm_pay": payment.handle_confirm_pay, # <<< POINTS TO PAYMENT WRAPPER
+                "confirm_pay": payment.handle_confirm_pay,
                 "apply_discount_basket_pay": handle_apply_discount_basket_pay,
                 "skip_discount_basket_pay": handle_skip_discount_basket_pay,
                 "select_basket_crypto": payment.handle_select_basket_crypto,
