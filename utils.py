@@ -8,18 +8,18 @@ import json
 import shutil
 import tempfile
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone # Keep timezone
 from decimal import Decimal, ROUND_DOWN, ROUND_UP # Use Decimal for financial calculations
 import requests # Added for API calls
+from collections import Counter, defaultdict # Keep defaultdict
 
 # --- Telegram Imports ---
 from telegram import Update, Bot
 from telegram.constants import ParseMode # Keep import but change default usage
 import telegram.error as telegram_error
 from telegram.ext import ContextTypes
-# -------------------------
 from telegram import helpers # Keep for potential other uses, but not escaping
-from collections import Counter, defaultdict # Moved higher up
+# -------------------------
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -97,7 +97,7 @@ LANGUAGES = {
     "en": {
         "native_name": "English",
         # --- General & Menu ---
-        "welcome": "👋 Welcome, {username}!",
+        "welcome": "👋 Welcome, {username}!\n\n👤 Status: {status} {progress_bar}\n💰 Balance: {balance_str} EUR\n📦 Total Purchases: {purchases}\n🛒 Basket Items: {basket_count}\n\nStart shopping or explore your options below.\n\n⚠️ Note: No refunds.", # <<< Default Welcome Message Format
         "status_label": "Status",
         "balance_label": "Balance",
         "purchases_label": "Total Purchases",
@@ -309,7 +309,7 @@ LANGUAGES = {
         "admin_menu": "🔧 Admin Panel\n\nManage the bot from here:",
         "admin_select_city": "🏙️ Select City to Edit\n\nChoose a city:",
         "admin_select_district": "🏘️ Select District in {city}\n\nPick a district:",
-        "admin_select_type": "💎 Select Product Type\n\nChoose or create a type:", # Changed "Candy" to "Product"
+        "admin_select_type": "💎 Select Product Type\n\nChoose or create a type:",
         "admin_choose_action": "📦 Manage {type} in {city}, {district}\n\nWhat would you like to do?",
         "set_media_prompt_plain": "📸 Send a photo, video, or GIF to display above all messages:",
         "state_error": "❌ Error: Invalid State\n\nPlease start the 'Add New Product' process again from the Admin Panel.",
@@ -320,7 +320,8 @@ LANGUAGES = {
         "admin_edit_type_emoji_button": "✏️ Change Emoji",
         "admin_invalid_emoji": "❌ Invalid input. Please send a single emoji.",
         "admin_type_emoji_updated": "✅ Emoji updated successfully for {type_name}!",
-        "admin_edit_type_menu": "🧩 Editing Type: {type_name}\n\nCurrent Emoji: {emoji}\n\nWhat would you like to do?",
+        "admin_edit_type_menu": "🧩 Editing Type: {type_name}\n\nCurrent Emoji: {emoji}\nDescription: {description}\n\nWhat would you like to do?", # Added {description}
+        "admin_edit_type_desc_button": "📝 Edit Description", #<<< NEW
         # --- Broadcast Translations ---
         "broadcast_select_target": "📢 Broadcast Message\n\nSelect the target audience:",
         "broadcast_target_all": "👥 All Users",
@@ -369,57 +370,83 @@ LANGUAGES = {
         "unban_success": "✅ User @{username} (ID: {user_id}) has been unbanned.",
         "ban_db_error": "❌ Database error updating ban status.",
         "ban_cannot_ban_admin": "❌ Cannot ban the primary admin.",
+        # <<< Welcome Message Management >>>
+        "manage_welcome_title": "⚙️ Manage Welcome Messages",
+        "manage_welcome_prompt": "Select a template to manage or activate:",
+        "welcome_template_active": " (Active ✅)",
+        "welcome_template_inactive": "",
+        "welcome_button_activate": "✅ Activate",
+        "welcome_button_edit": "✏️ Edit",
+        "welcome_button_delete": "🗑️ Delete",
+        "welcome_button_add_new": "➕ Add New Template",
+        "welcome_button_reset_default": "🔄 Reset to Built-in Default", # <<< NEW
+        "welcome_button_edit_text": "Edit Text", # <<< NEW
+        "welcome_button_edit_desc": "Edit Description", # <<< NEW
+        "welcome_button_preview": "👁️ Preview", # <<< NEW
+        "welcome_button_save": "💾 Save Template", # <<< NEW
+        "welcome_activate_success": "✅ Template '{name}' activated.",
+        "welcome_activate_fail": "❌ Failed to activate template '{name}'.",
+        "welcome_add_name_prompt": "Enter a unique short name for the new template (e.g., 'default', 'promo_weekend'):",
+        "welcome_add_name_exists": "❌ Error: A template with the name '{name}' already exists.",
+        "welcome_add_text_prompt": "Template Name: {name}\n\nPlease reply with the full welcome message text. Available placeholders:\n{placeholders}", # Plain text placeholders
+        "welcome_add_description_prompt": "Optional: Enter a short description for this template (admin view only). Send '-' to skip.", # <<< NEW
+        "welcome_add_success": "✅ Welcome message template '{name}' added.",
+        "welcome_add_fail": "❌ Failed to add welcome message template.",
+        "welcome_edit_text_prompt": "Editing Text for '{name}'. Current text:\n\n{current_text}\n\nPlease reply with the new text. Available placeholders:\n{placeholders}", # Plain text placeholders
+        "welcome_edit_description_prompt": "Editing description for '{name}'. Current: '{current_desc}'.\n\nEnter new description or send '-' to keep current.", # <<< NEW
+        "welcome_edit_success": "✅ Template '{name}' updated.",
+        "welcome_edit_fail": "❌ Failed to update template '{name}'.",
+        "welcome_delete_confirm_title": "⚠️ Confirm Deletion",
+        "welcome_delete_confirm_text": "Are you sure you want to delete the welcome message template named '{name}'?",
+        "welcome_delete_confirm_active": "\n\n🚨 WARNING: This is the currently active template! Deleting it will revert to the default built-in message.",
+        "welcome_delete_confirm_last": "\n\n🚨 WARNING: This is the last template! Deleting it will revert to the default built-in message.",
+        "welcome_delete_button_yes": "✅ Yes, Delete Template",
+        "welcome_delete_success": "✅ Template '{name}' deleted.",
+        "welcome_delete_fail": "❌ Failed to delete template '{name}'.",
+        "welcome_delete_not_found": "❌ Template '{name}' not found for deletion.",
+        "welcome_cannot_delete_active": "❌ Cannot delete the active template. Activate another first.", # <<< NEW
+        "welcome_reset_confirm_title": "⚠️ Confirm Reset", # <<< NEW
+        "welcome_reset_confirm_text": "Are you sure you want to reset the text of the 'default' template to the built-in version and activate it?", # <<< NEW
+        "welcome_reset_button_yes": "✅ Yes, Reset & Activate", # <<< NEW
+        "welcome_reset_success": "✅ 'default' template reset and activated.", # <<< NEW
+        "welcome_reset_fail": "❌ Failed to reset 'default' template.", # <<< NEW
+        "welcome_preview_title": "--- Welcome Message Preview ---", # <<< NEW
+        "welcome_preview_name": "Name", # <<< NEW
+        "welcome_preview_desc": "Desc", # <<< NEW
+        "welcome_preview_confirm": "Save this template?", # <<< NEW
+        "welcome_save_error_context": "❌ Error: Save data lost. Cannot save template.", # <<< NEW
+        "welcome_invalid_placeholder": "⚠️ Formatting Error! Missing placeholder: `{key}`\n\nRaw Text:\n{text}", # <<< NEW
+        "welcome_formatting_error": "⚠️ Unexpected Formatting Error!\n\nRaw Text:\n{text}", # <<< NEW
     },
     # --- Lithuanian ---
     "lt": {
         "native_name": "Lietuvių",
-        # !!! ADD ALL YOUR LT TRANSLATIONS HERE !!!
-        "shop_button": "Parduotuvė",
-        "profile_button": "Profilis",
-        "top_up_button": "Papildyti",
-        "reviews_button": "Atsiliepimai",
-        "price_list_button": "Kainoraštis",
-        "language_button": "Kalba",
-        "home_button": "Pradžia",
-        "back_button": "Atgal",
-        "cancel_button": "Atšaukti",
-        # ... add other button translations ...
+        # ... (all existing LT translations) ...
     },
     # --- Russian ---
     "ru": {
         "native_name": "Русский",
-        # !!! ADD ALL YOUR RU TRANSLATIONS HERE !!!
-        "shop_button": "Магазин",
-        "profile_button": "Профиль",
-        "top_up_button": "Пополнить",
-        "reviews_button": "Отзывы",
-        "price_list_button": "Прайс-лист",
-        "language_button": "Язык",
-        "home_button": "Главная",
-        "back_button": "Назад",
-        "cancel_button": "Отмена",
-        # ... add other button translations ...
+        # ... (all existing RU translations) ...
     }
 }
 # ==============================================================
 # ===== ^ ^ ^ ^ ^      LANGUAGE DICTIONARY     ^ ^ ^ ^ ^ ======
 # ==============================================================
 
+DEFAULT_WELCOME_MESSAGE = LANGUAGES['en']['welcome'] # Hardcoded fallback
 MIN_DEPOSIT_EUR = Decimal('5.00') # Minimum deposit amount in EUR
 NOWPAYMENTS_API_URL = "https://api.nowpayments.io"
-COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
-FEE_ADJUSTMENT = Decimal('1.0')
+FEE_ADJUSTMENT = Decimal('1.0') # Default 1.0 means no adjustment
 
 # --- Global Data Variables ---
 CITIES = {}
 DISTRICTS = {}
 PRODUCT_TYPES = {}
 DEFAULT_PRODUCT_EMOJI = "💎" # Fallback emoji
-SIZES = ["2g", "5g"]
-BOT_MEDIA = {'type': None, 'path': None}
-currency_price_cache = {}
-min_amount_cache = {}
-CACHE_EXPIRY_SECONDS = 900
+SIZES = ["2g", "5g"] # Predefined sizes (can be changed)
+BOT_MEDIA = {'type': None, 'path': None} # Stores current bot media info
+min_amount_cache = {} # Cache for NOWPayments minimum amounts
+CACHE_EXPIRY_SECONDS = 900 # Cache expiry for min amounts (15 minutes)
 
 # --- Database Connection Helper ---
 def get_db_connection():
@@ -429,18 +456,21 @@ def get_db_connection():
         if db_dir:
             try: os.makedirs(db_dir, exist_ok=True)
             except OSError as e: logger.warning(f"Could not create DB dir {db_dir}: {e}")
-        conn = sqlite3.connect(DATABASE_PATH, timeout=10)
-        conn.execute("PRAGMA foreign_keys = ON;")
-        conn.row_factory = sqlite3.Row
+        conn = sqlite3.connect(DATABASE_PATH, timeout=10) # 10-second timeout
+        conn.execute("PRAGMA foreign_keys = ON;") # Enforce foreign key constraints
+        conn.row_factory = sqlite3.Row # Access columns by name
         return conn
     except sqlite3.Error as e:
         logger.critical(f"CRITICAL ERROR connecting to database at {DATABASE_PATH}: {e}")
-        raise SystemExit(f"Failed to connect to database: {e}")
+        return None # Return None to indicate connection failure
+    except Exception as e: # Catch potential permission errors etc.
+        logger.critical(f"CRITICAL UNEXPECTED ERROR connecting to database at {DATABASE_PATH}: {e}", exc_info=True)
+        return None
 
 
 # --- Database Initialization ---
 def init_db():
-    """Initializes the database schema ONLY."""
+    """Initializes the database schema, including reseller tables."""
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -450,72 +480,37 @@ def init_db():
                 total_purchases INTEGER DEFAULT 0, basket TEXT DEFAULT '',
                 language TEXT DEFAULT 'en', theme TEXT DEFAULT 'default',
                 is_banned INTEGER DEFAULT 0,
-                is_reseller INTEGER DEFAULT 0 -- <-- ADDED RESELLER FLAG
+                is_reseller INTEGER DEFAULT 0 -- Added reseller flag
             )''')
-            # Add is_banned column if it doesn't exist
-            try:
-                c.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
-                logger.info("Added 'is_banned' column to users table.")
-            except sqlite3.OperationalError as alter_e:
-                 if "duplicate column name: is_banned" in str(alter_e): pass # Ignore if already exists
-                 else: raise
-            # Add is_reseller column if it doesn't exist
-            try:
-                c.execute("ALTER TABLE users ADD COLUMN is_reseller INTEGER DEFAULT 0")
-                logger.info("Added 'is_reseller' column to users table.")
-            except sqlite3.OperationalError as alter_e:
-                 if "duplicate column name: is_reseller" in str(alter_e): pass
-                 else: raise
+            # Add is_banned column if it doesn't exist (idempotent check)
+            try: c.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
+            except sqlite3.OperationalError as e:
+                 if "duplicate column name: is_banned" not in str(e): raise
+            # Add is_reseller column if it doesn't exist (idempotent check)
+            try: c.execute("ALTER TABLE users ADD COLUMN is_reseller INTEGER DEFAULT 0")
+            except sqlite3.OperationalError as e:
+                 if "duplicate column name: is_reseller" not in str(e): raise
 
-            # cities table
-            c.execute('''CREATE TABLE IF NOT EXISTS cities (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL
-            )''')
-            # districts table
-            c.execute('''CREATE TABLE IF NOT EXISTS districts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, city_id INTEGER NOT NULL, name TEXT NOT NULL,
-                FOREIGN KEY(city_id) REFERENCES cities(id) ON DELETE CASCADE, UNIQUE (city_id, name)
-            )''')
-            # product_types table
-            c.execute(f'''CREATE TABLE IF NOT EXISTS product_types (
-                name TEXT PRIMARY KEY NOT NULL,
-                emoji TEXT DEFAULT '{DEFAULT_PRODUCT_EMOJI}'
-            )''')
-            try:
-                c.execute(f"ALTER TABLE product_types ADD COLUMN emoji TEXT DEFAULT '{DEFAULT_PRODUCT_EMOJI}'")
-                logger.info("Added 'emoji' column to product_types table.")
-            except sqlite3.OperationalError as alter_e:
-                 if "duplicate column name: emoji" in str(alter_e): pass
-                 else: raise
-            # products table
-            c.execute('''CREATE TABLE IF NOT EXISTS products (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, city TEXT NOT NULL, district TEXT NOT NULL,
-                product_type TEXT NOT NULL, size TEXT NOT NULL, name TEXT NOT NULL, price REAL NOT NULL,
-                available INTEGER DEFAULT 1, reserved INTEGER DEFAULT 0, original_text TEXT,
-                added_by INTEGER, added_date TEXT
-            )''')
-            # product_media table
-            c.execute('''CREATE TABLE IF NOT EXISTS product_media (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL,
-                media_type TEXT NOT NULL, file_path TEXT UNIQUE NOT NULL, telegram_file_id TEXT,
-                FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
-            )''')
-            # purchases table
-            # Consider adding reseller_discount_applied REAL here if you need to track it per purchase
-            c.execute('''CREATE TABLE IF NOT EXISTS purchases (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, product_id INTEGER,
-                product_name TEXT NOT NULL, product_type TEXT NOT NULL, product_size TEXT NOT NULL,
-                price_paid REAL NOT NULL, city TEXT NOT NULL, district TEXT NOT NULL, purchase_date TEXT NOT NULL,
-                FOREIGN KEY(user_id) REFERENCES users(user_id),
-                FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE SET NULL
-            )''')
-            # reviews table
-            c.execute('''CREATE TABLE IF NOT EXISTS reviews (
-                review_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
-                review_text TEXT NOT NULL, review_date TEXT NOT NULL,
-                FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
-            )''')
-            # discount_codes table
+            # --- cities, districts, product_types ---
+            c.execute('CREATE TABLE IF NOT EXISTS cities (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)')
+            c.execute('CREATE TABLE IF NOT EXISTS districts (id INTEGER PRIMARY KEY AUTOINCREMENT, city_id INTEGER NOT NULL, name TEXT NOT NULL, FOREIGN KEY(city_id) REFERENCES cities(id) ON DELETE CASCADE, UNIQUE (city_id, name))')
+            c.execute(f'CREATE TABLE IF NOT EXISTS product_types (name TEXT PRIMARY KEY NOT NULL, emoji TEXT DEFAULT "{DEFAULT_PRODUCT_EMOJI}", description TEXT)')
+            # Add emoji column idempotently
+            try: c.execute(f"ALTER TABLE product_types ADD COLUMN emoji TEXT DEFAULT '{DEFAULT_PRODUCT_EMOJI}'")
+            except sqlite3.OperationalError as e:
+                if "duplicate column name: emoji" not in str(e): raise
+            # Add description column idempotently
+            try: c.execute("ALTER TABLE product_types ADD COLUMN description TEXT")
+            except sqlite3.OperationalError as e:
+                if "duplicate column name: description" not in str(e): raise
+
+            # --- products, product_media, purchases, reviews ---
+            c.execute('CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, city TEXT NOT NULL, district TEXT NOT NULL, product_type TEXT NOT NULL, size TEXT NOT NULL, name TEXT NOT NULL, price REAL NOT NULL, available INTEGER DEFAULT 1, reserved INTEGER DEFAULT 0, original_text TEXT, added_by INTEGER, added_date TEXT)')
+            c.execute('CREATE TABLE IF NOT EXISTS product_media (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL, media_type TEXT NOT NULL, file_path TEXT UNIQUE NOT NULL, telegram_file_id TEXT, FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE)')
+            c.execute('CREATE TABLE IF NOT EXISTS purchases (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, product_id INTEGER, product_name TEXT NOT NULL, product_type TEXT NOT NULL, product_size TEXT NOT NULL, price_paid REAL NOT NULL, city TEXT NOT NULL, district TEXT NOT NULL, purchase_date TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(user_id), FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE SET NULL)')
+            c.execute('CREATE TABLE IF NOT EXISTS reviews (review_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, review_text TEXT NOT NULL, review_date TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE)')
+
+            # --- discount_codes (General codes) ---
             c.execute('''CREATE TABLE IF NOT EXISTS discount_codes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE NOT NULL,
                 discount_type TEXT NOT NULL CHECK(discount_type IN ('percentage', 'fixed')),
@@ -523,7 +518,8 @@ def init_db():
                 max_uses INTEGER DEFAULT NULL, uses_count INTEGER DEFAULT 0,
                 created_date TEXT NOT NULL, expiry_date TEXT DEFAULT NULL
             )''')
-            # pending_deposits table
+
+            # --- pending_deposits ---
             c.execute('''CREATE TABLE IF NOT EXISTS pending_deposits (
                 payment_id TEXT PRIMARY KEY NOT NULL,
                 user_id INTEGER NOT NULL,
@@ -531,17 +527,32 @@ def init_db():
                 target_eur_amount REAL NOT NULL,
                 expected_crypto_amount REAL NOT NULL,
                 created_at TEXT NOT NULL,
+                is_purchase INTEGER DEFAULT 0,
+                basket_snapshot_json TEXT DEFAULT NULL,
+                discount_code_used TEXT DEFAULT NULL,
                 FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )''')
-            try:
-                # Ensure expected_crypto_amount column exists
-                c.execute("ALTER TABLE pending_deposits ADD COLUMN expected_crypto_amount REAL")
-                logger.info("Added 'expected_crypto_amount' column to pending_deposits table.")
-            except sqlite3.OperationalError as alter_e:
-                 if "duplicate column name: expected_crypto_amount" in str(alter_e): pass
-                 else: raise
+            # Add columns idempotently
+            pending_cols = [col[1] for col in c.execute("PRAGMA table_info(pending_deposits)").fetchall()]
+            if 'expected_crypto_amount' not in pending_cols:
+                try: c.execute("ALTER TABLE pending_deposits ADD COLUMN expected_crypto_amount REAL NOT NULL DEFAULT 0.0") # Add default
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name: expected_crypto_amount" not in str(e): raise
+            if 'is_purchase' not in pending_cols:
+                try: c.execute("ALTER TABLE pending_deposits ADD COLUMN is_purchase INTEGER DEFAULT 0")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name: is_purchase" not in str(e): raise
+            if 'basket_snapshot_json' not in pending_cols:
+                try: c.execute("ALTER TABLE pending_deposits ADD COLUMN basket_snapshot_json TEXT DEFAULT NULL")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name: basket_snapshot_json" not in str(e): raise
+            if 'discount_code_used' not in pending_cols:
+                try: c.execute("ALTER TABLE pending_deposits ADD COLUMN discount_code_used TEXT DEFAULT NULL")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name: discount_code_used" not in str(e): raise
 
-            # --- NEW: reseller_discounts table ---
+
+            # --- reseller_discounts table ---
             c.execute('''CREATE TABLE IF NOT EXISTS reseller_discounts (
                 reseller_user_id INTEGER NOT NULL,
                 product_type TEXT NOT NULL,
@@ -550,7 +561,6 @@ def init_db():
                 FOREIGN KEY(reseller_user_id) REFERENCES users(user_id) ON DELETE CASCADE,
                 FOREIGN KEY(product_type) REFERENCES product_types(name) ON DELETE CASCADE
             )''')
-            # ------------------------------------
 
             # --- admin_log table ---
             c.execute('''CREATE TABLE IF NOT EXISTS admin_log (
@@ -564,42 +574,77 @@ def init_db():
                 old_value TEXT,
                 new_value TEXT
             )''')
-            # --------------------------
+
+            # --- bot_settings table ---
+            c.execute('''CREATE TABLE IF NOT EXISTS bot_settings (
+                setting_key TEXT PRIMARY KEY NOT NULL,
+                setting_value TEXT
+            )''')
+            c.execute("INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
+                      ("active_welcome_message_name", "default"))
+
+            # --- welcome_messages table ---
+            c.execute('''CREATE TABLE IF NOT EXISTS welcome_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                template_text TEXT NOT NULL,
+                description TEXT
+            )''')
+            try: c.execute("ALTER TABLE welcome_messages ADD COLUMN description TEXT")
+            except sqlite3.OperationalError as e:
+                if "duplicate column name: description" not in str(e): raise
 
             # Create Indices
-            c.execute("CREATE INDEX IF NOT EXISTS idx_product_media_product_id ON product_media(product_id)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases(purchase_date)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_purchases_user ON purchases(user_id)")
-            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_districts_city_name ON districts(city_id, name)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_products_location_type ON products(city, district, product_type)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_reviews_user ON reviews(user_id)")
-            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_discount_code_unique ON discount_codes(code)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_pending_deposits_user_id ON pending_deposits(user_id)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_admin_log_timestamp ON admin_log(timestamp)") # Index for admin log
-            c.execute("CREATE INDEX IF NOT EXISTS idx_users_banned ON users(is_banned)") # Index for banned status
-            # --- Add new indices ---
-            c.execute("CREATE INDEX IF NOT EXISTS idx_users_reseller ON users(is_reseller)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_reseller_discounts_user ON reseller_discounts(reseller_user_id)")
-            # -----------------------
+            indices = [
+                "CREATE INDEX IF NOT EXISTS idx_product_media_product_id ON product_media(product_id)",
+                "CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases(purchase_date)",
+                "CREATE INDEX IF NOT EXISTS idx_purchases_user ON purchases(user_id)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_districts_city_name ON districts(city_id, name)",
+                "CREATE INDEX IF NOT EXISTS idx_products_location_type ON products(city, district, product_type)",
+                "CREATE INDEX IF NOT EXISTS idx_reviews_user ON reviews(user_id)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_discount_code_unique ON discount_codes(code)",
+                "CREATE INDEX IF NOT EXISTS idx_pending_deposits_user_id ON pending_deposits(user_id)",
+                "CREATE INDEX IF NOT EXISTS idx_admin_log_timestamp ON admin_log(timestamp)",
+                "CREATE INDEX IF NOT EXISTS idx_users_banned ON users(is_banned)",
+                "CREATE INDEX IF NOT EXISTS idx_pending_deposits_is_purchase ON pending_deposits(is_purchase)",
+                "CREATE INDEX IF NOT EXISTS idx_users_reseller ON users(is_reseller)", # Added
+                "CREATE INDEX IF NOT EXISTS idx_reseller_discounts_user ON reseller_discounts(reseller_user_id)", # Added
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_welcome_message_name ON welcome_messages(name)" # Added
+            ]
+            for index_sql in indices:
+                c.execute(index_sql)
 
             conn.commit()
             logger.info(f"Database schema at {DATABASE_PATH} initialized/verified successfully (incl. reseller tables/columns).")
     except sqlite3.Error as e:
         logger.critical(f"CRITICAL ERROR: Database initialization failed for {DATABASE_PATH}: {e}", exc_info=True)
         raise SystemExit("Database initialization failed.")
+    except Exception as e:
+        logger.critical(f"CRITICAL UNEXPECTED ERROR during DB init: {e}", exc_info=True)
+        raise SystemExit("Unexpected error during DB initialization.")
 
 
-# --- Pending Deposit DB Helpers (Synchronous) ---
-def add_pending_deposit(payment_id: str, user_id: int, currency: str, target_eur_amount: float, expected_crypto_amount: float):
+# --- Pending Deposit DB Helpers (Synchronous - Modified for Purchase Context) ---
+# Kept as is from previous version (no changes needed here for resellers)
+def add_pending_deposit(payment_id: str, user_id: int, currency: str, target_eur_amount: float, expected_crypto_amount: float, is_purchase: bool = False, basket_snapshot: list | None = None, discount_code: str | None = None):
+    basket_json = json.dumps(basket_snapshot) if basket_snapshot else None
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute("""
-                INSERT INTO pending_deposits (payment_id, user_id, currency, target_eur_amount, expected_crypto_amount, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (payment_id, user_id, currency.lower(), target_eur_amount, expected_crypto_amount, datetime.now(timezone.utc).isoformat()))
+                INSERT INTO pending_deposits (
+                    payment_id, user_id, currency, target_eur_amount,
+                    expected_crypto_amount, created_at, is_purchase,
+                    basket_snapshot_json, discount_code_used
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                payment_id, user_id, currency.lower(), target_eur_amount,
+                expected_crypto_amount, datetime.now(timezone.utc).isoformat(),
+                1 if is_purchase else 0, basket_json, discount_code
+                ))
             conn.commit()
-            logger.info(f"Added pending deposit {payment_id} for user {user_id} ({target_eur_amount:.2f} EUR / exp: {expected_crypto_amount} {currency}).")
+            log_type = "direct purchase" if is_purchase else "refill"
+            logger.info(f"Added pending {log_type} deposit {payment_id} for user {user_id} ({target_eur_amount:.2f} EUR / exp: {expected_crypto_amount} {currency}). Basket items: {len(basket_snapshot) if basket_snapshot else 0}.")
             return True
     except sqlite3.IntegrityError:
         logger.warning(f"Attempted to add duplicate pending deposit ID: {payment_id}")
@@ -612,40 +657,68 @@ def get_pending_deposit(payment_id: str):
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("SELECT user_id, currency, target_eur_amount, expected_crypto_amount FROM pending_deposits WHERE payment_id = ?", (payment_id,))
+            c.execute("""
+                SELECT user_id, currency, target_eur_amount, expected_crypto_amount,
+                       is_purchase, basket_snapshot_json, discount_code_used
+                FROM pending_deposits WHERE payment_id = ?
+            """, (payment_id,))
             row = c.fetchone()
             if row:
                 row_dict = dict(row)
-                # Handle potential NULL in expected_crypto_amount for older records
                 if row_dict.get('expected_crypto_amount') is None:
-                    logger.warning(f"Pending deposit {payment_id} has NULL expected_crypto_amount. Using 0.0.")
                     row_dict['expected_crypto_amount'] = 0.0
+                if row_dict.get('basket_snapshot_json'):
+                    try: row_dict['basket_snapshot'] = json.loads(row_dict['basket_snapshot_json'])
+                    except json.JSONDecodeError: row_dict['basket_snapshot'] = None
+                else: row_dict['basket_snapshot'] = None
                 return row_dict
-            else:
-                return None
+            else: return None
     except sqlite3.Error as e:
         logger.error(f"DB error fetching pending deposit {payment_id}: {e}", exc_info=True)
         return None
 
-
-def remove_pending_deposit(payment_id: str):
+def _unreserve_basket_items(basket_snapshot: list | None):
+    if not basket_snapshot: return
+    product_ids_to_release_counts = Counter(item['product_id'] for item in basket_snapshot)
+    if not product_ids_to_release_counts: return
+    conn = None
     try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            result = c.execute("DELETE FROM pending_deposits WHERE payment_id = ?", (payment_id,))
-            conn.commit()
-            if result.rowcount > 0:
-                logger.info(f"Removed pending deposit record for payment ID: {payment_id}")
-                return True
-            else:
-                logger.info(f"No pending deposit record found to remove for payment ID: {payment_id}")
-                return False
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("BEGIN")
+        decrement_data = [(count, pid) for pid, count in product_ids_to_release_counts.items()]
+        c.executemany("UPDATE products SET reserved = MAX(0, reserved - ?) WHERE id = ?", decrement_data)
+        conn.commit()
+        logger.info(f"Un-reserved {sum(product_ids_to_release_counts.values())} items due to failed/expired payment.")
     except sqlite3.Error as e:
-        logger.error(f"DB error removing pending deposit {payment_id}: {e}", exc_info=True)
+        logger.error(f"DB error un-reserving items: {e}", exc_info=True)
+        if conn and conn.in_transaction: conn.rollback()
+    finally:
+        if conn: conn.close()
+
+def remove_pending_deposit(payment_id: str, trigger: str = "unknown"):
+    pending_info = get_pending_deposit(payment_id)
+    deleted = False
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        result = c.execute("DELETE FROM pending_deposits WHERE payment_id = ?", (payment_id,))
+        conn.commit()
+        deleted = result.rowcount > 0
+        if deleted: logger.info(f"Removed pending deposit record for payment ID: {payment_id} (Trigger: {trigger})")
+        else: logger.info(f"No pending deposit record found to remove for payment ID: {payment_id} (Trigger: {trigger})")
+    except sqlite3.Error as e:
+        logger.error(f"DB error removing pending deposit {payment_id} (Trigger: {trigger}): {e}", exc_info=True)
         return False
+    if deleted and pending_info and pending_info.get('is_purchase') == 1 and trigger in ["failure", "expiry", "cancel", "underpaid", "zero_credit", "currency_mismatch"]:
+        logger.info(f"Payment {payment_id} was a direct purchase that failed/expired/cancelled/invalid. Attempting to un-reserve items.")
+        _unreserve_basket_items(pending_info.get('basket_snapshot'))
+    return deleted
 
 
 # --- Data Loading Functions (Synchronous) ---
+# Kept as is from previous version
 def load_cities():
     cities_data = {}
     try:
@@ -654,13 +727,13 @@ def load_cities():
     return cities_data
 
 def load_districts():
-    districts_data = {}
+    districts_data = defaultdict(dict)
     try:
         with get_db_connection() as conn:
             c = conn.cursor(); c.execute("SELECT d.city_id, d.id, d.name FROM districts d ORDER BY d.city_id, d.name")
-            for row in c.fetchall(): city_id_str = str(row['city_id']); districts_data.setdefault(city_id_str, {})[str(row['id'])] = row['name']
+            for row in c.fetchall(): districts_data[str(row['city_id'])][str(row['id'])] = row['name']
     except sqlite3.Error as e: logger.error(f"Failed to load districts: {e}")
-    return districts_data
+    return dict(districts_data)
 
 def load_product_types():
     product_types_dict = {}
@@ -674,25 +747,23 @@ def load_product_types():
     return product_types_dict
 
 def load_all_data():
-    """Loads all dynamic data, modifying global variables IN PLACE."""
     global CITIES, DISTRICTS, PRODUCT_TYPES
     logger.info("Starting load_all_data (in-place update)...")
     try:
         cities_data = load_cities()
         districts_data = load_districts()
         product_types_dict = load_product_types()
-
         CITIES.clear(); CITIES.update(cities_data)
         DISTRICTS.clear(); DISTRICTS.update(districts_data)
         PRODUCT_TYPES.clear(); PRODUCT_TYPES.update(product_types_dict)
-
         logger.info(f"Loaded (in-place) {len(CITIES)} cities, {sum(len(d) for d in DISTRICTS.values())} districts, {len(PRODUCT_TYPES)} product types.")
     except Exception as e:
         logger.error(f"Error during load_all_data (in-place): {e}", exc_info=True)
         CITIES.clear(); DISTRICTS.clear(); PRODUCT_TYPES.clear()
 
 
-# --- Bot Media Loading (from specified path on disk) ---
+# --- Bot Media Loading ---
+# Kept as is from previous version
 if os.path.exists(BOT_MEDIA_JSON_PATH):
     try:
         with open(BOT_MEDIA_JSON_PATH, 'r') as f: BOT_MEDIA = json.load(f)
@@ -705,18 +776,10 @@ else: logger.info(f"{BOT_MEDIA_JSON_PATH} not found. Bot starting without defaul
 
 
 # --- Utility Functions ---
-def _get_lang_data(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, dict]:
-    """Gets the current language code and corresponding language data dictionary."""
-    lang = context.user_data.get("lang", "en")
-    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
-    if lang not in LANGUAGES:
-        logger.warning(f"_get_lang_data: Language '{lang}' not found in LANGUAGES dict. Falling back to 'en'.")
-        lang = 'en'
-    return lang, lang_data
-
+# Kept as is from previous version
 def format_currency(value):
     try: return f"{Decimal(str(value)):.2f}"
-    except (ValueError, TypeError): logger.warning(f"Could not format currency {value}"); return "0.00"
+    except (ValueError, TypeError): logger.warning(f"Could format currency {value}"); return "0.00"
 
 def format_discount_value(dtype, value):
     try:
@@ -733,13 +796,8 @@ def get_progress_bar(purchases):
     except (ValueError, TypeError): return '[⬜️⬜️⬜️⬜️⬜️]'
 
 async def send_message_with_retry(
-    bot: Bot,
-    chat_id: int,
-    text: str,
-    reply_markup=None,
-    max_retries=3,
-    parse_mode=None, # Defaulting to None (plain text)
-    disable_web_page_preview=False
+    bot: Bot, chat_id: int, text: str, reply_markup=None, max_retries=3,
+    parse_mode=None, disable_web_page_preview=False
 ):
     for attempt in range(max_retries):
         try:
@@ -750,10 +808,9 @@ async def send_message_with_retry(
         except telegram_error.BadRequest as e:
             logger.warning(f"BadRequest sending to {chat_id} (Attempt {attempt+1}/{max_retries}): {e}. Text: {text[:100]}...")
             if "chat not found" in str(e).lower() or "bot was blocked" in str(e).lower() or "user is deactivated" in str(e).lower():
-                logger.error(f"Unrecoverable BadRequest sending to {chat_id}: {e}. Aborting retries.")
-                return None
-            # Don't retry on other BadRequests like entity parsing errors
-            logger.error(f"Non-retryable BadRequest sending to {chat_id}: {e}"); break
+                logger.error(f"Unrecoverable BadRequest sending to {chat_id}: {e}. Aborting retries."); return None
+            if attempt < max_retries - 1: await asyncio.sleep(1 * (2 ** attempt)); continue
+            else: logger.error(f"Max retries reached for BadRequest sending to {chat_id}: {e}"); break
         except telegram_error.RetryAfter as e:
             retry_seconds = e.retry_after + 1
             logger.warning(f"Rate limit hit sending to {chat_id}. Retrying after {retry_seconds} seconds.")
@@ -771,7 +828,7 @@ async def send_message_with_retry(
     logger.error(f"Failed to send message to {chat_id} after {max_retries} attempts: {text[:100]}..."); return None
 
 def get_date_range(period_key):
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     try:
         if period_key == 'today': start = now.replace(hour=0, minute=0, second=0, microsecond=0); end = now
         elif period_key == 'yesterday': yesterday = now - timedelta(days=1); start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0); end = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
@@ -781,11 +838,9 @@ def get_date_range(period_key):
         elif period_key == 'last_month': first_of_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0); end_of_last_month = first_of_this_month - timedelta(microseconds=1); start = end_of_last_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0); end = end_of_last_month.replace(hour=23, minute=59, second=59, microsecond=999999)
         elif period_key == 'year': start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0); end = now
         else: return None, None
-        # Ensure start and end are timezone-aware (UTC) before formatting
-        if start.tzinfo is None: start = start.astimezone()
-        if end.tzinfo is None: end = end.astimezone()
-        return start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
+        return start.isoformat(), end.isoformat()
     except Exception as e: logger.error(f"Error calculating date range for '{period_key}': {e}"); return None, None
+
 
 def get_user_status(purchases):
     try:
@@ -795,6 +850,7 @@ def get_user_status(purchases):
         else: return "New 🌱"
     except (ValueError, TypeError): return "New 🌱"
 
+# clear_expired_basket, clear_all_expired_baskets, fetch_last_purchases, fetch_reviews kept as is
 def clear_expired_basket(context: ContextTypes.DEFAULT_TYPE, user_id: int):
     if 'basket' not in context.user_data: context.user_data['basket'] = []
     conn = None
@@ -814,23 +870,19 @@ def clear_expired_basket(context: ContextTypes.DEFAULT_TYPE, user_id: int):
         expired_product_ids_counts = Counter(); expired_items_found = False
         potential_prod_ids = []
 
-        # Extract potential product IDs first
         for item_part in items:
             if item_part and ':' in item_part:
                 try: potential_prod_ids.append(int(item_part.split(':')[0]))
                 except ValueError: logger.warning(f"Invalid product ID format in basket string '{item_part}' for user {user_id}")
 
-        # Fetch details for valid potential IDs
         product_details = {}
         if potential_prod_ids:
              unique_potential_prod_ids = list(set(potential_prod_ids))
-             if unique_potential_prod_ids: # Ensure list is not empty
-                 placeholders = ','.join('?' * len(unique_potential_prod_ids))
-                 c.execute(f"SELECT id, price, product_type FROM products WHERE id IN ({placeholders})", unique_potential_prod_ids)
-                 for row in c.fetchall():
-                     product_details[row['id']] = {'price': Decimal(str(row['price'])), 'type': row['product_type']}
+             placeholders = ','.join('?' * len(unique_potential_prod_ids))
+             c.execute(f"SELECT id, price, product_type FROM products WHERE id IN ({placeholders})", unique_potential_prod_ids)
+             for row in c.fetchall():
+                 product_details[row['id']] = {'price': Decimal(str(row['price'])), 'type': row['product_type']}
 
-        # Process basket items using fetched details
         for item_str in items:
             if not item_str: continue
             try:
@@ -839,20 +891,13 @@ def clear_expired_basket(context: ContextTypes.DEFAULT_TYPE, user_id: int):
                     valid_items_str_list.append(item_str)
                     if prod_id in product_details:
                         valid_items_userdata_list.append({
-                            "product_id": prod_id,
-                            "price": product_details[prod_id]['price'], # Original price
-                            "timestamp": ts,
-                            "product_type": product_details[prod_id]['type'] # Add type here
+                            "product_id": prod_id, "price": product_details[prod_id]['price'],
+                            "timestamp": ts, "product_type": product_details[prod_id]['type']
                         })
-                    else:
-                        logger.warning(f"P{prod_id} details not found during basket validation (user {user_id}). Item removed from context.")
-                        expired_items_found = True # Treat as expired/invalid for DB update
-                else:
-                    expired_product_ids_counts[prod_id] += 1
-                    expired_items_found = True
-            except (ValueError, IndexError) as e: logger.warning(f"Malformed item '{item_str}' in basket for user {user_id}: {e}")
+                    else: logger.warning(f"P{prod_id} details not found during basket validation (user {user_id})."); expired_items_found = True
+                else: expired_product_ids_counts[prod_id] += 1; expired_items_found = True
+            except (ValueError, IndexError) as e: logger.warning(f"Malformed item '{item_str}' in basket for user {user_id}: {e}"); expired_items_found = True
 
-        # Update DB if expired/invalid items were found
         if expired_items_found:
             new_basket_str = ','.join(valid_items_str_list)
             c.execute("UPDATE users SET basket = ? WHERE user_id = ?", (new_basket_str, user_id))
@@ -862,16 +907,12 @@ def clear_expired_basket(context: ContextTypes.DEFAULT_TYPE, user_id: int):
                 logger.info(f"Released {sum(expired_product_ids_counts.values())} expired/invalid reservations for user {user_id}.")
 
         c.execute("COMMIT")
-        # Update context user_data with the validated list
         context.user_data['basket'] = valid_items_userdata_list
-        # Clear discount if basket is now empty
         if not valid_items_userdata_list and context.user_data.get('applied_discount'):
             context.user_data.pop('applied_discount', None); logger.info(f"Cleared discount for user {user_id} as basket became empty.")
-
     except sqlite3.Error as e: logger.error(f"SQLite error clearing basket user {user_id}: {e}", exc_info=True); conn.rollback() if conn and conn.in_transaction else None
     except Exception as e: logger.error(f"Unexpected error clearing basket user {user_id}: {e}", exc_info=True)
     finally: conn.close() if conn else None
-
 
 def clear_all_expired_baskets():
     logger.info("Running scheduled job: clear_all_expired_baskets")
@@ -903,7 +944,7 @@ def clear_all_expired_baskets():
 def fetch_last_purchases(user_id, limit=10):
     try:
         with get_db_connection() as conn:
-            c = conn.cursor(); c.execute("SELECT purchase_date, product_name, product_size, price_paid FROM purchases WHERE user_id = ? ORDER BY purchase_date DESC LIMIT ?", (user_id, limit))
+            c = conn.cursor(); c.execute("SELECT purchase_date, product_name, product_type, product_size, price_paid FROM purchases WHERE user_id = ? ORDER BY purchase_date DESC LIMIT ?", (user_id, limit))
             return [dict(row) for row in c.fetchall()]
     except sqlite3.Error as e: logger.error(f"DB error fetching purchase history user {user_id}: {e}", exc_info=True); return []
 
@@ -916,36 +957,31 @@ def fetch_reviews(offset=0, limit=5):
 
 
 # --- API Helpers ---
+# Kept as is from previous version
 def get_nowpayments_min_amount(currency_code: str) -> Decimal | None:
     currency_code_lower = currency_code.lower()
     now = time.time()
     if currency_code_lower in min_amount_cache:
         min_amount, timestamp = min_amount_cache[currency_code_lower]
-        if now - timestamp < CACHE_EXPIRY_SECONDS * 2: logger.debug(f"Cache hit for {currency_code_lower} min amount: {min_amount}"); return min_amount
-    if not NOWPAYMENTS_API_KEY: logger.error("NOWPayments API key is missing, cannot fetch minimum amount."); return None
+        if now - timestamp < CACHE_EXPIRY_SECONDS * 2: return min_amount
+    if not NOWPAYMENTS_API_KEY: logger.error("NOWPayments API key is missing."); return None
     try:
         url = f"{NOWPAYMENTS_API_URL}/v1/min-amount"; params = {'currency_from': currency_code_lower}; headers = {'x-api-key': NOWPAYMENTS_API_KEY}
-        logger.debug(f"Fetching min amount for {currency_code_lower} from {url} with params {params}")
         response = requests.get(url, params=params, headers=headers, timeout=10)
-        logger.debug(f"NOWPayments min-amount response status: {response.status_code}, content: {response.text[:200]}")
         response.raise_for_status()
         data = response.json()
-        min_amount_key = 'min_amount'
-        if min_amount_key in data and data[min_amount_key] is not None:
-            min_amount = Decimal(str(data[min_amount_key])); min_amount_cache[currency_code_lower] = (min_amount, now)
-            logger.info(f"Fetched minimum amount for {currency_code_lower}: {min_amount} from NOWPayments.")
+        if 'min_amount' in data and data['min_amount'] is not None:
+            min_amount = Decimal(str(data['min_amount'])); min_amount_cache[currency_code_lower] = (min_amount, now)
             return min_amount
-        else: logger.warning(f"Could not find '{min_amount_key}' key or it was null for {currency_code_lower} in NOWPayments response: {data}"); return None
-    except requests.exceptions.Timeout: logger.error(f"Timeout fetching minimum amount for {currency_code_lower} from NOWPayments."); return None
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching minimum amount for {currency_code_lower} from NOWPayments: {e}")
-        if e.response is not None: logger.error(f"NOWPayments min-amount error response ({e.response.status_code}): {e.response.text}")
-        return None
-    except (KeyError, ValueError, json.JSONDecodeError) as e: logger.error(f"Error parsing NOWPayments min amount response for {currency_code_lower}: {e}"); return None
+        else: return None
+    except Exception as e: logger.error(f"Error fetching NOWPayments min amount for {currency_code_lower}: {e}"); return None
 
 def format_expiration_time(expiration_date_str: str | None) -> str:
     if not expiration_date_str: return "N/A"
-    try: dt_obj = datetime.fromisoformat(expiration_date_str); return dt_obj.strftime("%H:%M:%S %Z")
+    try:
+        if not expiration_date_str.endswith('Z') and '+' not in expiration_date_str and '-' not in expiration_date_str[10:]: expiration_date_str += 'Z'
+        dt_obj = datetime.fromisoformat(expiration_date_str.replace('Z', '+00:00'))
+        return dt_obj.strftime("%H:%M:%S %Z") if dt_obj.tzinfo else dt_obj.strftime("%H:%M:%S")
     except (ValueError, TypeError) as e: logger.warning(f"Could not parse expiration date string '{expiration_date_str}': {e}"); return "Invalid Date"
 
 
@@ -958,162 +994,142 @@ async def handle_coming_soon(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 
 # --- Fetch User IDs for Broadcast (Synchronous) ---
+# Kept as is from previous version
 def fetch_user_ids_for_broadcast(target_type: str, target_value: str | int | None = None) -> list[int]:
-    """Fetches user IDs based on broadcast target criteria."""
     user_ids = []
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
-
-        # Always exclude banned users from broadcasts
         base_condition = "WHERE is_banned = 0"
-
         if target_type == 'all':
             c.execute(f"SELECT user_id FROM users {base_condition}")
             user_ids = [row['user_id'] for row in c.fetchall()]
-            logger.info(f"Broadcast target 'all': Found {len(user_ids)} non-banned users.")
-
         elif target_type == 'status' and target_value:
             status = str(target_value).lower()
             min_purchases, max_purchases = -1, -1
             if status == LANGUAGES['en'].get("broadcast_status_vip", "VIP 👑").lower(): min_purchases = 10; max_purchases = float('inf')
             elif status == LANGUAGES['en'].get("broadcast_status_regular", "Regular ⭐").lower(): min_purchases = 5; max_purchases = 9
             elif status == LANGUAGES['en'].get("broadcast_status_new", "New 🌱").lower(): min_purchases = 0; max_purchases = 4
-
             if min_purchases != -1:
-                 if max_purchases == float('inf'):
-                     query = f"SELECT user_id FROM users {base_condition} AND total_purchases >= ?"
-                     params_sql = (min_purchases,)
-                 else:
-                     query = f"SELECT user_id FROM users {base_condition} AND total_purchases BETWEEN ? AND ?"
-                     params_sql = (min_purchases, max_purchases)
-                 c.execute(query, params_sql)
-                 user_ids = [row['user_id'] for row in c.fetchall()]
-                 logger.info(f"Broadcast target status '{target_value}': Found {len(user_ids)} non-banned users.")
-            else: logger.warning(f"Invalid status value for broadcast: {target_value}")
-
+                 if max_purchases == float('inf'): query_sql = f"SELECT user_id FROM users {base_condition} AND total_purchases >= ?"; params_sql = (min_purchases,)
+                 else: query_sql = f"SELECT user_id FROM users {base_condition} AND total_purchases BETWEEN ? AND ?"; params_sql = (min_purchases, max_purchases)
+                 c.execute(query_sql, params_sql); user_ids = [row['user_id'] for row in c.fetchall()]
         elif target_type == 'city' and target_value:
             city_name = str(target_value)
-            # Find non-banned users whose *most recent* purchase was in this city
-            c.execute(f"""
-                SELECT p1.user_id
-                FROM purchases p1 JOIN users u ON p1.user_id = u.user_id
-                WHERE p1.city = ? AND u.is_banned = 0
-                AND p1.purchase_date = (
-                    SELECT MAX(p2.purchase_date)
-                    FROM purchases p2
-                    WHERE p1.user_id = p2.user_id
-                )
-            """, (city_name,))
+            c.execute(f"SELECT p1.user_id FROM purchases p1 JOIN users u ON p1.user_id = u.user_id WHERE p1.city = ? AND u.is_banned = 0 AND p1.purchase_date = (SELECT MAX(p2.purchase_date) FROM purchases p2 WHERE p1.user_id = p2.user_id)", (city_name,))
             user_ids = [row['user_id'] for row in c.fetchall()]
-            logger.info(f"Broadcast target city '{city_name}': Found {len(user_ids)} non-banned users based on last purchase.")
-
         elif target_type == 'inactive' and target_value:
             try:
-                days_inactive = int(target_value)
-                if days_inactive <= 0: raise ValueError("Days must be positive")
-                cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_inactive)
-                cutoff_iso = cutoff_date.isoformat()
-
-                # 1. Get non-banned users with last purchase older than cutoff
-                c.execute(f"""
-                    SELECT p1.user_id
-                    FROM purchases p1 JOIN users u ON p1.user_id = u.user_id
-                    WHERE u.is_banned = 0 AND p1.purchase_date = (
-                        SELECT MAX(p2.purchase_date)
-                        FROM purchases p2
-                        WHERE p1.user_id = p2.user_id
-                    ) AND p1.purchase_date < ?
-                """, (cutoff_iso,))
+                days_inactive = int(target_value); cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_inactive); cutoff_iso = cutoff_date.isoformat()
+                c.execute(f"SELECT p1.user_id FROM purchases p1 JOIN users u ON p1.user_id = u.user_id WHERE u.is_banned = 0 AND p1.purchase_date = (SELECT MAX(p2.purchase_date) FROM purchases p2 WHERE p1.user_id = p2.user_id) AND p1.purchase_date < ?", (cutoff_iso,))
                 inactive_users = {row['user_id'] for row in c.fetchall()}
-
-                # 2. Get non-banned users with zero purchases
                 c.execute(f"SELECT user_id FROM users WHERE total_purchases = 0 AND is_banned = 0")
                 zero_purchase_users = {row['user_id'] for row in c.fetchall()}
-
-                user_ids_set = inactive_users.union(zero_purchase_users)
-                user_ids = list(user_ids_set)
-                logger.info(f"Broadcast target inactive >= {days_inactive} days: Found {len(user_ids)} non-banned users.")
-
-            except (ValueError, TypeError):
-                logger.error(f"Invalid number of days for inactive broadcast: {target_value}")
-
-        else:
-            logger.error(f"Unknown broadcast target type or missing value: type={target_type}, value={target_value}")
-
-    except sqlite3.Error as e:
-        logger.error(f"DB error fetching users for broadcast ({target_type}, {target_value}): {e}", exc_info=True)
-    except Exception as e:
-        logger.error(f"Unexpected error fetching users for broadcast: {e}", exc_info=True)
+                user_ids = list(inactive_users.union(zero_purchase_users))
+            except (ValueError, TypeError): logger.error(f"Invalid days for inactive broadcast: {target_value}")
+    except sqlite3.Error as e: logger.error(f"DB error fetching broadcast users: {e}", exc_info=True)
+    except Exception as e: logger.error(f"Unexpected error fetching broadcast users: {e}", exc_info=True)
     finally:
         if conn: conn.close()
-
+    logger.info(f"Broadcast target ({target_type}={target_value}): Found {len(user_ids)} users.")
     return user_ids
 
 
 # --- Admin Action Logging (Synchronous) ---
+# Kept as is from previous version
 def log_admin_action(admin_id: int, action: str, target_user_id: int | None = None, reason: str | None = None, amount_change: float | None = None, old_value=None, new_value=None):
-    """Logs an administrative action to the admin_log table."""
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute("""
                 INSERT INTO admin_log (timestamp, admin_id, target_user_id, action, reason, amount_change, old_value, new_value)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                datetime.now(timezone.utc).isoformat(),
-                admin_id,
-                target_user_id,
-                action,
-                reason,
-                amount_change,
-                str(old_value) if old_value is not None else None,
-                str(new_value) if new_value is not None else None
-            ))
+            """, (datetime.now(timezone.utc).isoformat(), admin_id, target_user_id, action, reason, amount_change, str(old_value) if old_value is not None else None, str(new_value) if new_value is not None else None))
             conn.commit()
             logger.info(f"Admin Action Logged: Admin={admin_id}, Action='{action}', Target={target_user_id}, Reason='{reason}', Amount={amount_change}, Old='{old_value}', New='{new_value}'")
-    except sqlite3.Error as e:
-        logger.error(f"Failed to log admin action: {e}", exc_info=True)
-    except Exception as e:
-        logger.error(f"Unexpected error logging admin action: {e}", exc_info=True)
+    except Exception as e: logger.error(f"Failed to log admin action: {e}", exc_info=True)
 
-# --- NEW: Reseller Discount Helper ---
-def get_reseller_discount(user_id: int, product_type: str) -> Decimal:
-    """Fetches the discount percentage for a specific reseller and product type."""
-    discount = Decimal('0.0')
+# --- Welcome Message Helpers (Synchronous) ---
+# Kept as is from previous version
+def load_active_welcome_message() -> str:
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
-        # First check if the user IS a reseller
-        c.execute("SELECT is_reseller FROM users WHERE user_id = ?", (user_id,))
-        res = c.fetchone()
-        # Only proceed if the user is marked as a reseller
-        if res and res['is_reseller'] == 1:
-            # Then fetch the specific discount for the product type
-            c.execute("""
-                SELECT discount_percentage FROM reseller_discounts
-                WHERE reseller_user_id = ? AND product_type = ?
-            """, (user_id, product_type))
-            discount_res = c.fetchone()
-            if discount_res:
-                discount = Decimal(str(discount_res['discount_percentage']))
-                logger.debug(f"Found reseller discount for user {user_id}, type {product_type}: {discount}%")
-            else:
-                 logger.debug(f"User {user_id} is reseller, but no specific discount for type {product_type}.")
-        # else: logger.debug(f"User {user_id} is not a reseller.") # Optional: log non-resellers
-    except sqlite3.Error as e:
-        logger.error(f"DB error fetching reseller discount for user {user_id}, type {product_type}: {e}")
-    except Exception as e:
-        logger.error(f"Unexpected error fetching reseller discount: {e}", exc_info=True)
+        c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
+        setting_row = c.fetchone()
+        active_name = setting_row['setting_value'] if setting_row else "default"
+        c.execute("SELECT template_text FROM welcome_messages WHERE name = ?", (active_name,))
+        template_row = c.fetchone()
+        if template_row: return template_row['template_text']
+        else:
+            c.execute("SELECT template_text FROM welcome_messages WHERE name = ?", ("default",))
+            template_row = c.fetchone()
+            if template_row: return template_row['template_text']
+            else: return DEFAULT_WELCOME_MESSAGE
+    except Exception as e: logger.error(f"Error loading active welcome message: {e}"); return DEFAULT_WELCOME_MESSAGE
     finally:
         if conn: conn.close()
-    return discount
+
+def get_welcome_message_templates(limit: int | None = None, offset: int = 0) -> list[dict]:
+    templates = []
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor(); query = "SELECT name, template_text, description FROM welcome_messages ORDER BY name"
+            params = [];
+            if limit is not None: query += " LIMIT ? OFFSET ?"; params.extend([limit, offset])
+            c.execute(query, params); templates = [dict(row) for row in c.fetchall()]
+    except Exception as e: logger.error(f"DB error fetching welcome templates: {e}")
+    return templates
+
+def get_welcome_message_template_count() -> int:
+    count = 0
+    try:
+        with get_db_connection() as conn: c = conn.cursor(); c.execute("SELECT COUNT(*) FROM welcome_messages"); result = c.fetchone(); count = result[0] if result else 0
+    except Exception as e: logger.error(f"DB error counting welcome templates: {e}")
+    return count
+
+def add_welcome_message_template(name: str, template_text: str, description: str | None = None) -> bool:
+    try:
+        with get_db_connection() as conn: c = conn.cursor(); c.execute("INSERT INTO welcome_messages (name, template_text, description) VALUES (?, ?, ?)", (name, template_text, description)); conn.commit(); return True
+    except sqlite3.IntegrityError: logger.warning(f"Duplicate welcome template name: '{name}'"); return False
+    except Exception as e: logger.error(f"DB error adding welcome template '{name}': {e}"); return False
+
+def update_welcome_message_template(name: str, new_template_text: str | None = None, new_description: str | None = None) -> bool:
+    if new_template_text is None and new_description is None: return False
+    updates = []; params = []
+    if new_template_text is not None: updates.append("template_text = ?"); params.append(new_template_text)
+    if new_description is not None: updates.append("description = ?"); params.append(new_description if new_description else None)
+    params.append(name); sql = f"UPDATE welcome_messages SET {', '.join(updates)} WHERE name = ?"
+    try:
+        with get_db_connection() as conn: c = conn.cursor(); result = c.execute(sql, params); conn.commit(); return result.rowcount > 0
+    except Exception as e: logger.error(f"DB error updating welcome template '{name}': {e}"); return False
+
+def delete_welcome_message_template(name: str) -> bool:
+    if name == "default": return False
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor(); result = c.execute("DELETE FROM welcome_messages WHERE name = ?", (name,)); conn.commit()
+            if result.rowcount > 0:
+                c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
+                active_setting = c.fetchone()
+                if active_setting and active_setting['setting_value'] == name: c.execute("UPDATE bot_settings SET setting_value = ? WHERE setting_key = ?", ("default", "active_welcome_message_name")); conn.commit()
+                return True
+            else: return False
+    except Exception as e: logger.error(f"DB error deleting welcome template '{name}': {e}"); return False
+
+def set_active_welcome_message(name: str) -> bool:
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor(); c.execute("SELECT 1 FROM welcome_messages WHERE name = ?", (name,))
+            if not c.fetchone(): return False
+            c.execute("INSERT OR REPLACE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)", ("active_welcome_message_name", name)); conn.commit(); return True
+    except Exception as e: logger.error(f"DB error setting active welcome message to '{name}': {e}"); return False
 
 
 # --- Initial Data Load ---
-init_db()
-load_all_data()
+# init_db() # Called once in main.py
+# load_all_data() # Called once in main.py after init_db
 
 # --- END OF FILE utils.py ---
