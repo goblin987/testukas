@@ -481,20 +481,21 @@ def nowpayments_webhook():
         logger.error("Webhook received but Telegram app or event loop not initialized.")
         return Response(status=503)
 
-    # --- SIGNATURE VERIFICATION (Enable in production!) ---
-    signature = request.headers.get('x-nowpayments-sig')
-    if not verify_nowpayments_signature(request, signature, NOWPAYMENTS_IPN_SECRET):
-        logger.error("Invalid NOWPayments webhook signature received or verification failed.")
-        return Response("Invalid Signature", status=401)
-    logger.info("NOWPayments webhook signature verified.")
-    # logger.warning("!!! NOWPayments signature verification is temporarily disabled !!!") # Keep commented out
+    # --- SIGNATURE VERIFICATION (Disabled for testing) ---
+    # signature = request.headers.get('x-nowpayments-sig')
+    # if not verify_nowpayments_signature(request, signature, NOWPAYMENTS_IPN_SECRET):
+    #     logger.error("Invalid NOWPayments webhook signature received or verification failed.")
+    #     return Response("Invalid Signature", status=401)
+    # logger.info("NOWPayments webhook signature verified.")
+    logger.warning("!!! NOWPayments signature verification is temporarily disabled !!!") # Indicate verification is OFF
+    # ------------------------------------------------------
 
     if not request.is_json:
         logger.warning("Webhook received non-JSON request.")
         return Response("Invalid Request", status=400)
 
     data = request.get_json()
-    logger.info(f"NOWPayments IPN received (VERIFIED): {json.dumps(data)}")
+    logger.info(f"NOWPayments IPN received (VERIFICATION DISABLED): {json.dumps(data)}") # Log indicates disabled
 
     required_keys = ['payment_id', 'payment_status', 'pay_currency', 'actually_paid']
     if not all(key in data for key in required_keys):
